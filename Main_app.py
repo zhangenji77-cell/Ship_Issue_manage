@@ -2,151 +2,186 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import sqlalchemy
-from sqlalchemy import text  # 用于处理云端 SQL 语句
-import export_utils  # 引用你的导出工具
+from sqlalchemy import text
+import sqlite3
+import export_utils  # 确保你的 export_utils.py 也在 GitHub 上
 
-# 1. 页面基本设置
-st.set_page_config(page_title="船舶问题云填报系统", layout="wide")
-st.title("🚢 船舶问题周度填报系统 (云端版)")
+# 1. 页面基本配置
+st.set_page_config(page_title="船舶问题云填报系统", layout="wide", page_icon="🚢")
+st.title("🚢 船舶问题周度填报系统 (云端稳定版)")
 
 
-# 2. 【关键】云数据库连接函数
+# 2. 数据库连接函数
 def get_db_connection():
-    # 部署到 Streamlit Cloud 后，在这里填入 Secrets 中的连接地址
     try:
+        # 从 Streamlit Secrets 读取连接字符串
         db_url = st.secrets["postgres_url"]
-        engine = sqlalchemy.create_engine(db_url)
+        # 自动更正协议头（SQLAlchemy 要求使用 postgresql://）
+        if db_url.startswith("postgres://"):
+            db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+        engine = sqlalchemy.create_engine(db_url, pool_pre_ping=True)
         return engine.connect()
     except Exception as e:
-        st.error("数据库连接失败，请检查 Secrets 配置。")
+        st.error(f"❌ 数据库连接失败: {e}")
+        st.info("请检查 Streamlit Cloud 后台的 Secrets 配置是否正确。")
         return None
 
 
-def get_last_week_issue(ship_id):
-    """核心逻辑：从云端数据库抓取上周问题"""
+# 3. 自动初始化表结构 (防止 ProgrammingError)
+def init_db_tables():
     conn = get_db_connection()
     if conn:
-        # PostgreSQL 的语法与 SQLite 略有不同，这里使用通用写法
-        query = text("SELECT this_week_issue FROM reports WHERE ship_id = :sid ORDER BY report_date DESC LIMIT 1")
-        res = conn.execute(query, {"sid": ship_id}).fetchone()
-        conn.close()
-        return res[0] if res else "（初次填报，暂无历史记录）"
-    return "连接失败"
+        try:
+            with conn.begin():
+                # 创建船舶基础信息表
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ships (
+                        id SERIAL PRIMARY KEY,
+                        ship_name TEXT NOT NULL,
+                        manager_name TEXT NOT NULL
+                    );
+                """))
+                # 创建周报记录表
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS reports (
+                        id SERIAL PRIMARY KEY,
+                        ship_id INTEGER REFERENCES ships(id),
+                        report_date DATE,
+                        this_week_issue TEXT,
+                        remarks TEXT
+                    );
+                """))
+        except Exception as e:
+            st.error(f"初始化表结构失败: {e}")
+        finally:
+            conn.close()
 
 
-# 3. 侧边栏：获取管理人名单
+# 执行初始化
+init_db_tables()
+
+# 4. 侧边栏：身份选择
 conn = get_db_connection()
 if conn:
-    managers_df = pd.read_sql_query(text("SELECT DISTINCT manager_name FROM ships"), conn)
-    conn.close()
-    current_user = st.sidebar.selectbox("🔑 请选择您的姓名", managers_df['manager_name'].tolist())
+    try:
+        managers_query = text("SELECT DISTINCT manager_name FROM ships")
+        managers_df = pd.read_sql_query(managers_query, conn)
+
+        if not managers_df.empty:
+            manager_list = managers_df['manager_name'].tolist()
+            current_user = st.sidebar.selectbox("🔑 请选择您的姓名", manager_list)
+        else:
+            st.sidebar.warning("⚡ 数据库中暂无管理人数据，请先使用底部的搬家工具导入。")
+            current_user = None
+    except Exception as e:
+        st.sidebar.error("读取数据失败")
+        current_user = None
+    finally:
+        conn.close()
 else:
-    st.stop()  # 连接失败则停止运行
+    st.stop()
 
-# 4. 主界面：填报逻辑
-st.header(f"欢迎，{current_user}。")
+# 5. 主填报界面
+if current_user:
+    st.header(f"欢迎，{current_user}。")
 
-conn = get_db_connection()
-my_ships_df = pd.read_sql_query(text("SELECT * FROM ships WHERE manager_name = :name"), conn,
-                                params={"name": current_user})
-conn.close()
+    conn = get_db_connection()
+    ships_query = text("SELECT * FROM ships WHERE manager_name = :name")
+    my_ships_df = pd.read_sql_query(ships_query, conn, params={"name": current_user})
+    conn.close()
 
-if not my_ships_df.empty:
-    selected_ship_name = st.selectbox("1. 选择船舶", my_ships_df['ship_name'].tolist())
-    ship_id = int(my_ships_df[my_ships_df['ship_name'] == selected_ship_name]['id'].iloc[0])
+    if not my_ships_df.empty:
+        selected_ship_name = st.selectbox("1. 选择要填报的船舶", my_ships_df['ship_name'].tolist())
+        ship_id = int(my_ships_df[my_ships_df['ship_name'] == selected_ship_name]['id'].iloc[0])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📊 历史记录回溯")
-        last_issue = get_last_week_issue(ship_id)
-        st.info(f"**该船上一周存在的问题：**\n\n {last_issue}")
+        col1, col2 = st.columns(2)
 
-    with col2:
-        st.subheader("📝 本周数据填报")
-        this_issue = st.text_area("2. 本周船舶问题", placeholder="请输入...", height=150)
-        remark = st.text_input("3. 备注 (选填)")
+        with col1:
+            st.subheader("📊 历史记录回溯")
+            conn = get_db_connection()
+            last_q = text("SELECT this_week_issue FROM reports WHERE ship_id = :sid ORDER BY report_date DESC LIMIT 1")
+            last_res = conn.execute(last_q, {"sid": ship_id}).fetchone()
+            conn.close()
 
-        if st.button("✅ 提交并存入云端"):
-            if this_issue:
-                conn = get_db_connection()
-                today = datetime.now().strftime('%Y-%m-%d')
-                ins_query = text(
-                    "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :issue, :rem)")
-                conn.execute(ins_query, {"sid": ship_id, "dt": today, "issue": this_issue, "rem": remark})
-                conn.commit()
-                conn.close()
-                st.success("数据已永久同步至云端数据库！")
-            else:
-                st.warning("请填写内容。")
+            last_issue_val = last_res[0] if last_res else "（该船暂无历史填报记录）"
+            st.info(f"**该船上一周存在的问题：**\n\n {last_issue_val}")
 
-# 5. 底部：导出功能
+        with col2:
+            st.subheader("📝 本周数据填报")
+            this_issue = st.text_area("2. 本周船舶问题", placeholder="请详细描述本周发现的问题...", height=150)
+            remark = st.text_input("3. 备注 (选填)")
+
+            if st.button("✅ 提交并同步至云端"):
+                if this_issue:
+                    conn = get_db_connection()
+                    try:
+                        with conn.begin():
+                            ins_q = text(
+                                "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :issue, :rem)")
+                            conn.execute(ins_q, {
+                                "sid": ship_id,
+                                "dt": datetime.now().date(),
+                                "issue": this_issue,
+                                "rem": remark
+                            })
+                        st.success(f"数据已于 {datetime.now().strftime('%H:%M:%S')} 成功存入云端！")
+                    except Exception as e:
+                        st.error(f"提交失败: {e}")
+                    finally:
+                        conn.close()
+                else:
+                    st.warning("⚠️ 请输入本周问题后再提交。")
+
+# 6. 导出模块
 st.divider()
-st.header("📊 会议材料生成")
-if st.button("🔄 准备汇总数据"):
-    summary_df = export_utils.get_report_data()  # 注意：export_utils 也需要同步修改为 SQLAlchemy 模式
-    if not summary_df.empty:
-        st.dataframe(summary_df)
-        excel_file = export_utils.generate_excel(summary_df, "汇总.xlsx")
-        ppt_file = export_utils.generate_ppt(summary_df, "展示.pptx")
+st.header("📂 报表与会议材料")
+if st.button("🔍 准备本周汇总数据"):
+    with st.spinner("正在抓取云端数据并生成文档..."):
+        df_summary = export_utils.get_report_data()
+        if not df_summary.empty:
+            st.dataframe(df_summary)
+            excel_file = export_utils.generate_excel(df_summary, "船舶周报汇总.xlsx")
+            ppt_file = export_utils.generate_ppt(df_summary, "周报展示.pptx")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            with open(excel_file, "rb") as f:
-                st.download_button("📥 下载 Excel", f, file_name=excel_file)
-        with c2:
-            with open(ppt_file, "rb") as f:
-                st.download_button("📥 下载 PPT", f, file_name=ppt_file)
-                # --- 临时管理员工具：数据搬家 ---
-                st.divider()
-                st.subheader("🛠️ 管理员工具：旧数据迁移")
+            c1, c2 = st.columns(2)
+            with c1:
+                with open(excel_file, "rb") as f:
+                    st.download_button("📥 下载 Excel 表格", f, file_name=excel_file)
+            with c2:
+                with open(ppt_file, "rb") as f:
+                    st.download_button("📥 下载 PPT 汇报幻灯片", f, file_name=ppt_file)
+        else:
+            st.info("💡 过去 7 天内暂无任何填报记录。")
 
-                with st.expander("我是管理员，我要导入本地 ships.db 数据"):
-                    uploaded_db = st.file_uploader("请上传你电脑上的 ships.db 文件", type="db")
+# 7. 管理员搬家工具 (迁移完成后可自行删除此段)
+st.divider()
+with st.expander("🛠️ 开发者专用：本地数据迁移工具"):
+    st.write("如果云端是空的，请上传你电脑上的 `ships.db` 文件进行初始化。")
+    uploaded_file = st.file_uploader("上传 ships.db", type="db")
+    if uploaded_file and st.button("🚀 开始云端搬家"):
+        import tempfile
 
-                    if uploaded_db and st.button("开始云端迁移"):
-                        import tempfile
-                        import shutil
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
 
-                        # 1. 保存上传的文件到云端临时目录
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
-                            tmp_file.write(uploaded_db.getvalue())
-                            tmp_db_path = tmp_file.name
+        try:
+            local_conn = sqlite3.connect(tmp_path)
+            s_df = pd.read_sql("SELECT * FROM ships", local_conn)
+            r_df = pd.read_sql("SELECT * FROM reports", local_conn)
+            local_conn.close()
 
-                        st.write("✅ 文件已上传至云端服务器，正在读取...")
-
-                        try:
-                            # 2. 读取上传的 SQLite
-                            local_conn = sqlite3.connect(tmp_db_path)
-                            ships_df = pd.read_sql_query("SELECT * FROM ships", local_conn)
-                            reports_df = pd.read_sql_query("SELECT * FROM reports", local_conn)
-                            local_conn.close()
-
-                            st.write(f"📦 发现船舶数据：{len(ships_df)} 条")
-                            st.write(f"📦 发现历史周报：{len(reports_df)} 条")
-
-                            # 3. 写入云端 PostgreSQL
-                            conn_cloud = get_db_connection()
-                            if conn_cloud:
-                                # 写入 ships 表
-                                if not ships_df.empty:
-                                    ships_df.to_sql('ships', conn_cloud, if_exists='append', index=False)
-                                    st.success("✅ 船舶基础信息导入成功！")
-
-                                # 写入 reports 表
-                                if not reports_df.empty:
-                                    reports_df.to_sql('reports', conn_cloud, if_exists='append', index=False)
-                                    st.success("✅ 历史周报记录导入成功！")
-
-                                # 修复 ID 序列
-                                conn_cloud.execute(text("SELECT setval('ships_id_seq', (SELECT MAX(id) FROM ships))"))
-                                conn_cloud.execute(
-                                    text("SELECT setval('reports_id_seq', (SELECT MAX(id) FROM reports))"))
-                                conn_cloud.commit()
-                                conn_cloud.close()
-                                st.balloons()
-                                st.success("🎉 数据大搬家完成！现在你可以删除这个上传工具了。")
-                            else:
-                                st.error("云端数据库连接失败，请检查 Secrets。")
-
-                        except Exception as e:
-                            st.error(f"迁移过程中发生错误: {e}")
+            cloud_conn = get_db_connection()
+            if cloud_conn:
+                s_df.to_sql('ships', cloud_conn, if_exists='append', index=False)
+                r_df.to_sql('reports', cloud_conn, if_exists='append', index=False)
+                # 修复 ID 序列
+                cloud_conn.execute(text("SELECT setval('ships_id_seq', (SELECT MAX(id) FROM ships))"))
+                cloud_conn.execute(text("SELECT setval('reports_id_seq', (SELECT MAX(id) FROM reports))"))
+                cloud_conn.commit()
+                cloud_conn.close()
+                st.balloons()
+                st.success("🎉 数据迁移成功！请刷新页面查看。")
+        except Exception as e:
+            st.error(f"迁移失败: {e}")
