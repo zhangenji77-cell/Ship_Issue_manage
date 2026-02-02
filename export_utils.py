@@ -8,14 +8,22 @@ import streamlit as st
 from datetime import datetime
 
 
-# 1. 数据库连接函数（从 Streamlit Secrets 读取）
+# 1. 数据库连接函数 (同步 Main_app.py 的终极修复逻辑)
 def get_conn():
     try:
         db_url = st.secrets["postgres_url"]
-        # 处理可能出现的协议头不兼容问题
         if db_url.startswith("postgres://"):
             db_url = db_url.replace("postgres://", "postgresql://", 1)
-        engine = sqlalchemy.create_engine(db_url)
+
+        # 必须加入 NullPool 和 connect_args 才能在 Supabase 连接池模式下稳定运行
+        engine = sqlalchemy.create_engine(
+            db_url,
+            poolclass=sqlalchemy.pool.NullPool,
+            connect_args={
+                "sslmode": "require",
+                "connect_timeout": 10
+            }
+        )
         return engine.connect()
     except Exception as e:
         st.error(f"导出工具连接数据库失败: {e}")
@@ -28,52 +36,57 @@ def get_report_data():
     if not conn:
         return pd.DataFrame()
 
-    # SQL 逻辑：抓取过去 7 天内提交的所有报告
-    main_query = text("""
-        SELECT r.id, s.ship_name, s.manager_name, r.report_date, r.this_week_issue, r.remarks, r.ship_id
-        FROM reports r
-        JOIN ships s ON r.ship_id = s.id
-        WHERE r.report_date >= CURRENT_DATE - INTERVAL '7 days'
-        ORDER BY r.report_date DESC
-    """)
-
-    this_week_records = conn.execute(main_query).fetchall()
-
-    final_data = []
-    for row in this_week_records:
-        # 子查询：为当前这艘船寻找“比本条记录日期更早”的最新一条记录
-        last_week_query = text("""
-            SELECT this_week_issue FROM reports 
-            WHERE ship_id = :sid AND report_date < :rdate
-            ORDER BY report_date DESC LIMIT 1
+    try:
+        # SQL 逻辑：抓取过去 7 天内提交的所有报告
+        main_query = text("""
+            SELECT r.id, s.ship_name, s.manager_name, r.report_date, r.this_week_issue, r.remarks, r.ship_id
+            FROM reports r
+            JOIN ships s ON r.ship_id = s.id
+            WHERE r.report_date >= CURRENT_DATE - INTERVAL '7 days'
+            ORDER BY r.report_date DESC
         """)
-        last_res = conn.execute(last_week_query, {"sid": row.ship_id, "rdate": row.report_date}).fetchone()
-        last_issue = last_res[0] if last_res else "无历史记录"
 
-        final_data.append({
-            "日期": row.report_date,
-            "船名": row.ship_name,
-            "船舶管理人": row.manager_name,
-            "上一周问题": last_issue,
-            "本周问题": row.this_week_issue,
-            "备注": row.remarks
-        })
+        this_week_records = conn.execute(main_query).fetchall()
 
-    conn.close()
-    return pd.DataFrame(final_data)
+        final_data = []
+        for row in this_week_records:
+            # 子查询：为当前这艘船寻找“比本条记录日期更早”的最新一条记录
+            last_week_query = text("""
+                SELECT this_week_issue FROM reports 
+                WHERE ship_id = :sid AND report_date < :rdate
+                ORDER BY report_date DESC LIMIT 1
+            """)
+            # 注意：row 对象的访问方式在 SQLAlchemy 2.0 中建议用属性或索引
+            last_res = conn.execute(last_week_query, {"sid": row.ship_id, "rdate": row.report_date}).fetchone()
+            last_issue = last_res[0] if last_res else "无历史记录"
+
+            final_data.append({
+                "日期": row.report_date,
+                "船名": row.ship_name,
+                "船舶管理人": row.manager_name,
+                "上一周问题": last_issue,
+                "本周问题": row.this_week_issue,
+                "备注": row.remarks
+            })
+        return pd.DataFrame(final_data)
+    except Exception as e:
+        st.error(f"提取报表数据出错: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 
 # 3. 生成 Excel
 def generate_excel(df, filename):
+    # 确保 openpyxl 已安装
     df.to_excel(filename, index=False, engine='openpyxl')
     return filename
 
 
-# 4. 生成 PPT (带颜色标注和自动排版)
+# 4. 生成 PPT (保持你优秀的排版逻辑)
 def generate_ppt(df, filename):
     prs = Presentation()
 
-    # 如果没有数据，生成一张空白提醒页
     if df.empty:
         slide = prs.slides.add_slide(prs.slide_layouts[6])
         left = top = width = height = Inches(1)
@@ -83,7 +96,6 @@ def generate_ppt(df, filename):
         return filename
 
     for _, row in df.iterrows():
-        # 使用“标题和内容”布局
         slide_layout = prs.slide_layouts[1]
         slide = prs.slides.add_slide(slide_layout)
 
@@ -109,7 +121,7 @@ def generate_ppt(df, filename):
         p = tf.add_paragraph()
         p.text = str(row['上一周问题'])
         p.font.size = Pt(14)
-        p.font.color.rgb = RGBColor(100, 100, 100)  # 灰色表示过去
+        p.font.color.rgb = RGBColor(100, 100, 100)
 
         # 第三行：本周重点 (醒目红色)
         p = tf.add_paragraph()
@@ -121,9 +133,8 @@ def generate_ppt(df, filename):
         p.text = str(row['本周问题'])
         p.font.size = Pt(20)
         p.font.bold = True
-        p.font.color.rgb = RGBColor(255, 0, 0)  # 醒目红
+        p.font.color.rgb = RGBColor(255, 0, 0)
 
-        # 第四行：备注
         if row['备注']:
             p = tf.add_paragraph()
             p.text = f"\n备注：{row['备注']}"
