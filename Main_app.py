@@ -11,29 +11,27 @@ st.title("🚢 船舶问题周度填报系统")
 
 
 # 2. 数据库连接函数 (保持高效连接)
+# 使用缓存装饰器，让引擎只创建一次
+@st.cache_resource
+def get_database_engine():
+    db_url = st.secrets["postgres_url"]
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    # 这里的 engine 会被缓存在内存中
+    return sqlalchemy.create_engine(
+        db_url,
+        poolclass=sqlalchemy.pool.NullPool,
+        connect_args={"sslmode": "require"}
+    )
+
+
 def get_db_connection():
     try:
-        db_url = st.secrets["postgres_url"]
-        if db_url.startswith("postgres://"):
-            db_url = db_url.replace("postgres://", "postgresql://", 1)
-
-        # 核心修复点：添加 connect_args 和 NullPool
-        # 1. sslmode=require 确保加密
-        # 2. prepared_statement_cache_size=0 防止在事务池模式下报错
-        engine = sqlalchemy.create_engine(
-            db_url,
-            pool_pre_ping=True,
-            connect_args={
-                "sslmode": "require",
-                "client_encoding": "utf8",
-                "connect_timeout": 10
-            },
-            # 如果使用连接池，建议设为 NullPool 让 Supabase 自己管理池
-            poolclass=sqlalchemy.pool.NullPool
-        )
+        engine = get_database_engine()
         return engine.connect()
     except Exception as e:
-        st.error(f"❌ 无法连接到云端数据库: {e}")
+        st.error(f"❌ 连接失败: {e}")
         return None
 
 

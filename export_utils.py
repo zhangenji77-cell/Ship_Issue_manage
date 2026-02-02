@@ -37,44 +37,37 @@ def get_report_data():
         return pd.DataFrame()
 
     try:
-        # SQL 逻辑：抓取过去 7 天内提交的所有报告
-        main_query = text("""
-            SELECT r.id, s.ship_name, s.manager_name, r.report_date, r.this_week_issue, r.remarks, r.ship_id
-            FROM reports r
-            JOIN ships s ON r.ship_id = s.id
-            WHERE r.report_date >= CURRENT_DATE - INTERVAL '7 days'
-            ORDER BY r.report_date DESC
+        # 使用窗口函数 LAG 一次性查出“当前记录”和“该船的上一条记录”
+        optimized_query = text("""
+            WITH RawData AS (
+                SELECT 
+                    s.ship_name, 
+                    s.manager_name, 
+                    r.report_date, 
+                    r.this_week_issue, 
+                    r.remarks,
+                    LAG(r.this_week_issue) OVER (PARTITION BY r.ship_id ORDER BY r.report_date) as last_week_issue
+                FROM reports r
+                JOIN ships s ON r.ship_id = s.id
+            )
+            SELECT * FROM RawData 
+            WHERE report_date >= CURRENT_DATE - INTERVAL '7 days'
+            ORDER BY report_date DESC
         """)
 
-        this_week_records = conn.execute(main_query).fetchall()
+        df = pd.read_sql_query(optimized_query, conn)
 
-        final_data = []
-        for row in this_week_records:
-            # 子查询：为当前这艘船寻找“比本条记录日期更早”的最新一条记录
-            last_week_query = text("""
-                SELECT this_week_issue FROM reports 
-                WHERE ship_id = :sid AND report_date < :rdate
-                ORDER BY report_date DESC LIMIT 1
-            """)
-            # 注意：row 对象的访问方式在 SQLAlchemy 2.0 中建议用属性或索引
-            last_res = conn.execute(last_week_query, {"sid": row.ship_id, "rdate": row.report_date}).fetchone()
-            last_issue = last_res[0] if last_res else "无历史记录"
+        # 简单重命名一下列名以匹配你的导出逻辑
+        df.columns = ["船名", "船舶管理人", "日期", "本周问题", "备注", "上一周问题"]
+        # 处理空值
+        df["上一周问题"] = df["上一周问题"].fillna("无历史记录")
 
-            final_data.append({
-                "日期": row.report_date,
-                "船名": row.ship_name,
-                "船舶管理人": row.manager_name,
-                "上一周问题": last_issue,
-                "本周问题": row.this_week_issue,
-                "备注": row.remarks
-            })
-        return pd.DataFrame(final_data)
+        return df
     except Exception as e:
         st.error(f"提取报表数据出错: {e}")
         return pd.DataFrame()
     finally:
         conn.close()
-
 
 # 3. 生成 Excel
 def generate_excel(df, filename):
