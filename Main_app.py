@@ -96,3 +96,57 @@ if st.button("🔄 准备汇总数据"):
         with c2:
             with open(ppt_file, "rb") as f:
                 st.download_button("📥 下载 PPT", f, file_name=ppt_file)
+                # --- 临时管理员工具：数据搬家 ---
+                st.divider()
+                st.subheader("🛠️ 管理员工具：旧数据迁移")
+
+                with st.expander("我是管理员，我要导入本地 ships.db 数据"):
+                    uploaded_db = st.file_uploader("请上传你电脑上的 ships.db 文件", type="db")
+
+                    if uploaded_db and st.button("开始云端迁移"):
+                        import tempfile
+                        import shutil
+
+                        # 1. 保存上传的文件到云端临时目录
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".db") as tmp_file:
+                            tmp_file.write(uploaded_db.getvalue())
+                            tmp_db_path = tmp_file.name
+
+                        st.write("✅ 文件已上传至云端服务器，正在读取...")
+
+                        try:
+                            # 2. 读取上传的 SQLite
+                            local_conn = sqlite3.connect(tmp_db_path)
+                            ships_df = pd.read_sql_query("SELECT * FROM ships", local_conn)
+                            reports_df = pd.read_sql_query("SELECT * FROM reports", local_conn)
+                            local_conn.close()
+
+                            st.write(f"📦 发现船舶数据：{len(ships_df)} 条")
+                            st.write(f"📦 发现历史周报：{len(reports_df)} 条")
+
+                            # 3. 写入云端 PostgreSQL
+                            conn_cloud = get_db_connection()
+                            if conn_cloud:
+                                # 写入 ships 表
+                                if not ships_df.empty:
+                                    ships_df.to_sql('ships', conn_cloud, if_exists='append', index=False)
+                                    st.success("✅ 船舶基础信息导入成功！")
+
+                                # 写入 reports 表
+                                if not reports_df.empty:
+                                    reports_df.to_sql('reports', conn_cloud, if_exists='append', index=False)
+                                    st.success("✅ 历史周报记录导入成功！")
+
+                                # 修复 ID 序列
+                                conn_cloud.execute(text("SELECT setval('ships_id_seq', (SELECT MAX(id) FROM ships))"))
+                                conn_cloud.execute(
+                                    text("SELECT setval('reports_id_seq', (SELECT MAX(id) FROM reports))"))
+                                conn_cloud.commit()
+                                conn_cloud.close()
+                                st.balloons()
+                                st.success("🎉 数据大搬家完成！现在你可以删除这个上传工具了。")
+                            else:
+                                st.error("云端数据库连接失败，请检查 Secrets。")
+
+                        except Exception as e:
+                            st.error(f"迁移过程中发生错误: {e}")
