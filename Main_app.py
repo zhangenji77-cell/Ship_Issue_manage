@@ -9,7 +9,7 @@ import time
 # --- 1. 基础配置 ---
 st.set_page_config(page_title="Trust Ship 船舶管理系统", layout="wide", page_icon="🚢")
 
-# 状态初始化
+# 初始化状态
 if 'drafts' not in st.session_state: st.session_state.drafts = {}
 if 'ship_index' not in st.session_state: st.session_state.ship_index = 0
 if 'editing_id' not in st.session_state: st.session_state.editing_id = None
@@ -17,8 +17,10 @@ if 'confirm_del_id' not in st.session_state: st.session_state.confirm_del_id = N
 if 'admin_confirm' not in st.session_state: st.session_state.admin_confirm = False
 
 
+# 必须在逻辑最开始初始化 CookieManager
+@st.cache_resource
 def get_manager():
-    return stx.CookieManager(key="trust_ship_v5")  # 升级 key 以清除旧缓存
+    return stx.CookieManager(key="trust_ship_v6")  # 再次升级 key 以强制浏览器刷新
 
 
 cookie_manager = get_manager()
@@ -29,27 +31,35 @@ def get_engine():
     return sqlalchemy.create_engine(st.secrets["postgres_url"])
 
 
-# --- 2. 增强型登录校验 (防止刷新掉线) ---
+# --- 2. 核心优化：防掉线预加载逻辑 ---
 def sync_auth():
+    # 如果 Session 里已经是 True，说明已经握手成功，直接放行
     if st.session_state.get('logged_in'):
         return True
 
-    # 给浏览器 JS 组件一点握手时间
-    with st.spinner("🚢 正在同步登录状态..."):
-        time.sleep(0.6)
-        all_cookies = cookie_manager.get_all()
-        session_data = all_cookies.get("trust_session")
+    # 如果没有登录，尝试从 Cookie 恢复
+    # 增加一个 loading 状态，防止 Python 跑得太快
+    with st.empty():
+        for _ in range(10):  # 最多尝试 10 次，每次等待 0.2 秒
+            all_cookies = cookie_manager.get_all()
+            if not all_cookies:
+                time.sleep(0.2)
+                continue
 
-        if session_data and "|" in session_data:
-            try:
-                u, r = session_data.split("|")
-                st.session_state.logged_in = True
-                st.session_state.username = u
-                st.session_state.role = r
-                st.rerun()
-                return True
-            except:
-                pass
+            saved_session = all_cookies.get("trust_session")
+            if saved_session and "|" in saved_session:
+                try:
+                    u, r = saved_session.split("|")
+                    st.session_state.logged_in = True
+                    st.session_state.username = u
+                    st.session_state.role = r
+                    st.rerun()  # 发现 Cookie 成功，立即重刷进入主页
+                    return True
+                except:
+                    break
+            else:
+                # 如果握手完成但确实没有 cookie，说明真没登录
+                break
     return False
 
 
@@ -66,43 +76,33 @@ def login_ui():
                     st.session_state.logged_in = True
                     st.session_state.username = u
                     st.session_state.role = res[0]
-                    # 合并存储 Cookie
+                    # 写入 Cookie
                     cookie_manager.set("trust_session", f"{u}|{res[0]}", expires_at=datetime.now() + timedelta(days=7))
                     st.rerun()
                 else:
-                    st.error("❌ 验证失败，请核对信息")
+                    st.error("❌ 验证失败")
 
 
+# 先检查静默登录，不行再跳登录框
 if not sync_auth():
     login_ui()
     st.stop()
 
-# --- 3. 侧边栏 ---
+# --- 3. 登录后的内容 (以下逻辑保持不变，确保权限隔离) ---
 st.sidebar.title(f"👤 {st.session_state.username}")
 if st.sidebar.button("🚪 安全登出"):
     st.session_state.logged_in = False
     cookie_manager.delete("trust_session")
     st.rerun()
 
-
-# --- 4. 数据获取 ---
-@st.cache_data(ttl=60)
-def get_ships_list(role, user):
-    with get_engine().connect() as conn:
-        if role == 'admin':
-            return pd.read_sql_query(text("SELECT id, ship_name FROM ships ORDER BY ship_name"), conn)
-        return pd.read_sql_query(text("SELECT id, ship_name FROM ships WHERE manager_name = :u ORDER BY ship_name"),
-                                 conn, params={"u": user})
-
-
-ships_df = get_ships_list(st.session_state.role, st.session_state.username)
-
-# --- 5. 选项卡布局 (严格权限控制) ---
+# 严格的权限过滤逻辑
 tabs_list = ["📝 数据填报与查询"]
-if st.session_state.role == 'admin':
+if st.session_state.get('role') == 'admin':
     tabs_list.append("🛠️ 管理员控制台")
 tabs_list.append("📂 报表导出")
 current_tab = st.tabs(tabs_list)
+
+# (后续代码... Tab 1, Tab 2 等保持与之前整合的一致)
 
 # --- Tab 1: 数据填报与历史 ---
 with current_tab[0]:
@@ -158,14 +158,14 @@ with current_tab[0]:
 
                 # ✅ 核心优化：User 删除增加取消按钮
                 if st.session_state.confirm_del_id:
-                    st.warning(f"⚠️ 确定从您的页面隐藏此记录 (ID: {st.session_state.confirm_del_id})？")
+                    st.warning(f"⚠️ 确定从您的页面删除此记录 (ID: {st.session_state.confirm_del_id})？")
                     cd_col1, cd_col2 = st.columns(2)
                     with cd_col1:
                         if st.button("❌ 取消操作", key="u_cancel_del", use_container_width=True):
                             st.session_state.confirm_del_id = None
                             st.rerun()
                     with cd_col2:
-                        if st.button("🔥 确认隐藏", key="u_confirm_del", use_container_width=True):
+                        if st.button("🔥 确认删除", key="u_confirm_del", use_container_width=True):
                             with get_engine().begin() as conn:
                                 conn.execute(text("UPDATE reports SET is_deleted_by_user = TRUE WHERE id = :id"),
                                              {"id": st.session_state.confirm_del_id})
