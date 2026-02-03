@@ -32,10 +32,19 @@ def init_database():
     cursor.execute("SELECT COUNT(*) FROM ships")
     if cursor.fetchone()[0] == 0:
         initial_ships = [
-            ('远洋雄狮号', '张三'),
-            ('胜利女神号', '李四'),
-            ('开拓者号', '张三'),
-            ('深海探索号', '王五')
+            ('UNI SUPPLY 1', 'Robert'),
+            ('SYNERGY', 'Robert'),
+            ('ZOEY', 'Robert'),
+            ('ZEVIROUS', 'Robert'),
+            ('ZALE', 'Robert'),
+            ('CHLOE', 'Robert'),
+            ('Jazzel', 'Robert'),
+            ('KATORIN 1', 'Wilson'),
+            ('OCEAN FORTUNE 18', 'Wilson')
+            ('ARINE', 'Wilson')
+            ('NILAM', 'Wilson')
+
+
         ]
         cursor.executemany('INSERT INTO ships (ship_name, manager_name) VALUES (?, ?)', initial_ships)
         print("✅ 已成功添加初始船舶和管理人数据！")

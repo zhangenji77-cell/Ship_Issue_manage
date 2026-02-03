@@ -13,7 +13,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-st.title("🚢 船舶问题周度填报系统")
+st.title("🚢 Weekly Reporting System for Vessel Issues")
 st.caption("当前节点：Singapore (ap-southeast-1) | 环境：极速缓存模式")
 
 
