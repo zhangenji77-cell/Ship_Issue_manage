@@ -87,42 +87,70 @@ tabs.append("报表与会议材料")
 current_tab = st.tabs(tabs)
 
 # --- Tab 1: 数据填写 (所有角色可见) ---
+# --- 在代码顶部初始化草稿箱 (如果不存在) ---
+if 'drafts' not in st.session_state:
+    st.session_state.drafts = {}  # 格式为 {ship_id: "内容"}
+
+# --- Tab 1: 数据填写 (优化版) ---
 with current_tab[0]:
     if ships_df.empty:
         st.warning("暂无分配给您的船舶。")
     else:
+        # 1. 选择船舶
         selected_ship = st.selectbox("选择船舶", ships_df['ship_name'].tolist())
-        ship_id = int(ships_df[ships_df['ship_name'] == selected_ship]['id'].iloc[0])
+        ship_row = ships_df[ships_df['ship_name'] == selected_ship].iloc[0]
+        ship_id = int(ship_row['id'])
+
+        # 2. 初始化该船的独立草稿
+        if ship_id not in st.session_state.drafts:
+            st.session_state.drafts[ship_id] = ""
 
         st.divider()
-        col1, col2 = st.columns(2)
+        col1, col2 = st.columns([1, 1.5])  # 调整比例，给填写框更多空间
 
         with col1:
             st.subheader("📊 历史记录")
-            # 实时抓取该船最后一条记录
             with get_engine().connect() as conn:
                 last_res = conn.execute(
                     text("SELECT this_week_issue FROM reports WHERE ship_id = :sid ORDER BY report_date DESC LIMIT 1"),
                     {"sid": ship_id}
                 ).fetchone()
-            st.info(last_res[0] if last_res else "暂无历史记录")
+            st.info(last_res[0] if last_res else "该船暂无历史记录")
 
         with col2:
-            st.subheader("📝 本周数据填写")
-            this_issue = st.text_area("船舶问题", height=150)
-            remark = st.text_input("备注")
-            if st.button("提交填报"):
-                if this_issue:
+            st.subheader(f"📝 本周数据填写 - {selected_ship}")
+
+            # --- 优化1：填写框变大 (height=350) ---
+            # --- 优化2：独立草稿逻辑 ---
+            input_issue = st.text_area(
+                "请描述本周发现的船舶问题：",
+                value=st.session_state.drafts[ship_id],  # 绑定独立草稿
+                height=350,  # 增大输入框
+                placeholder="在此输入问题详情...",
+                key=f"text_{ship_id}"  # 确保组件唯一性
+            )
+
+            # 实时更新草稿内容
+            st.session_state.drafts[ship_id] = input_issue
+
+            remark = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
+
+            if st.button("🚀 提交本周填报", use_container_width=True):
+                if input_issue.strip():
                     with get_engine().begin() as conn:
                         conn.execute(
                             text(
                                 "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
-                            {"sid": ship_id, "dt": datetime.now().date(), "iss": this_issue, "rem": remark}
+                            {"sid": ship_id, "dt": datetime.now().date(), "iss": input_issue, "rem": remark}
                         )
-                    st.success("提交成功！")
+                    st.success(f"✅ {selected_ship} 提交成功！")
+
+                    # 提交成功后，清空该船的草稿
+                    st.session_state.drafts[ship_id] = ""
                     st.cache_data.clear()
+                    st.rerun()  # 刷新页面以清空输入框
                 else:
-                    st.warning("请填写内容")
+                    st.warning("⚠️ 填写内容不能为空")
 
 # --- Tab 2: 管理员控制台 (仅自己/Admin可见) ---
 if st.session_state.role == 'admin':
