@@ -1,204 +1,155 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import sqlalchemy
 from sqlalchemy import text
 import export_utils
 
-# --- 1. 初始化配置 ---
-st.set_page_config(page_title="Trust Ship 管理系统", layout="wide", page_icon="🚢")
-
-
-@st.cache_resource
-def get_engine():
-    db_url = st.secrets["postgres_url"]
-    return sqlalchemy.create_engine(db_url)
-
-
-# --- 2. 登录系统逻辑 ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.username = None
-    st.session_state.role = None
-
-
-def login():
-    st.title("🔒 Trust Ship 系统登录")
-    with st.form("login_form"):
-        user_input = st.text_input("用户名")
-        pw_input = st.text_input("密码", type="password")
-        submit = st.form_submit_button("登录")
-
-        if submit:
-            engine = get_engine()
-            with engine.connect() as conn:
-                # 验证身份
-                query = text("SELECT role FROM users WHERE username = :u AND password = :p")
-                res = conn.execute(query, {"u": user_input, "p": pw_input}).fetchone()
-
-                if res:
-                    st.session_state.logged_in = True
-                    st.session_state.username = user_input
-                    st.session_state.role = res[0]
-                    st.rerun()
-                else:
-                    st.error("用户名或密码错误")
-
-
-if not st.session_state.logged_in:
-    login()
-    st.stop()
-
-# --- 3. 登录后的内容 ---
-
-# 侧边栏：用户信息与退出
-st.sidebar.title(f"👤 {st.session_state.username}")
-st.sidebar.info(f"权限角色: {st.session_state.role}")
-if st.sidebar.button("登出系统"):
-    st.session_state.logged_in = False
-    st.rerun()
-
-
-# 数据获取函数
-@st.cache_data(ttl=600)
-def get_ships_data(role, username):
-    engine = get_engine()
-    with engine.connect() as conn:
-        if role == 'admin':
-            # 管理员可以看到 50 艘船的所有内容
-            query = text("SELECT id, ship_name, manager_name FROM ships")
-            return pd.read_sql_query(query, conn)
-        else:
-            # 普通员工只能看到属于自己的船
-            query = text("SELECT id, ship_name, manager_name FROM ships WHERE manager_name = :u")
-            return pd.read_sql_query(query, conn, params={"u": username})
-
-
-ships_df = get_ships_data(st.session_state.role, st.session_state.username)
-
-# --- 4. 核心页面逻辑 ---
-
-# 页面导航（仅管理员可见管理选项）
-tabs = ["数据填写"]
-if st.session_state.role == 'admin':
-    tabs.append("管理员控制台")
-tabs.append("报表与会议材料")
-
-current_tab = st.tabs(tabs)
-
-# --- Tab 1: 数据填写 (所有角色可见) ---
-# --- 在代码顶部初始化草稿箱 (如果不存在) ---
+# --- 初始化草稿箱 ---
 if 'drafts' not in st.session_state:
-    st.session_state.drafts = {}  # 格式为 {ship_id: "内容"}
+    st.session_state.drafts = {}
 
-# --- Tab 1: 数据填写 (优化版) ---
+# --- Tab 1: 数据填写与历史查询 (优化版) ---
 with current_tab[0]:
     if ships_df.empty:
         st.warning("暂无分配给您的船舶。")
     else:
-        # 1. 选择船舶
-        selected_ship = st.selectbox("选择船舶", ships_df['ship_name'].tolist())
+        # 1. 船舶选择与草稿初始化
+        selected_ship = st.selectbox("🚢 选择船舶", ships_df['ship_name'].tolist())
         ship_row = ships_df[ships_df['ship_name'] == selected_ship].iloc[0]
         ship_id = int(ship_row['id'])
 
-        # 2. 初始化该船的独立草稿
         if ship_id not in st.session_state.drafts:
             st.session_state.drafts[ship_id] = ""
 
         st.divider()
-        col1, col2 = st.columns([1, 1.5])  # 调整比例，给填写框更多空间
+        col1, col2 = st.columns([1, 1.2])
 
+        # --- 优化1：历史记录板块 (加入日期查询与总记录) ---
         with col1:
-            st.subheader("📊 历史记录")
-            with get_engine().connect() as conn:
-                last_res = conn.execute(
-                    text("SELECT this_week_issue FROM reports WHERE ship_id = :sid ORDER BY report_date DESC LIMIT 1"),
-                    {"sid": ship_id}
-                ).fetchone()
-            st.info(last_res[0] if last_res else "该船暂无历史记录")
+            st.subheader("📊 历史记录回溯")
 
-        with col2:
-            st.subheader(f"📝 本周数据填写 - {selected_ship}")
-
-            # --- 优化1：填写框变大 (height=350) ---
-            # --- 优化2：独立草稿逻辑 ---
-            input_issue = st.text_area(
-                "请描述本周发现的船舶问题：",
-                value=st.session_state.drafts[ship_id],  # 绑定独立草稿
-                height=350,  # 增大输入框
-                placeholder="在此输入问题详情...",
-                key=f"text_{ship_id}"  # 确保组件唯一性
+            # 日期范围选择器
+            date_range = st.date_input(
+                "查询时间段",
+                value=[datetime.now() - timedelta(days=30), datetime.now()],
+                key=f"date_range_{ship_id}"
             )
 
-            # 实时更新草稿内容
-            st.session_state.drafts[ship_id] = input_issue
+            if len(date_range) == 2:
+                start_date, end_date = date_range
+                with get_engine().connect() as conn:
+                    query = text("""
+                        SELECT report_date as "日期", this_week_issue as "船舶问题", remarks as "备注"
+                        FROM reports 
+                        WHERE ship_id = :sid AND report_date BETWEEN :start AND :end
+                        ORDER BY report_date DESC
+                    """)
+                    history_df = pd.read_sql_query(query, conn, params={
+                        "sid": ship_id, "start": start_date, "end": end_date
+                    })
 
-            remark = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
+                if not history_df.empty:
+                    st.write(f"📅 该时段共计 {len(history_df)} 条记录")
+                    # 直接展示总记录列表，方便用户滚动查看每周问题
+                    st.dataframe(history_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("💡 该时段内无历史填报记录。")
 
-            if st.button("🚀 提交本周填报", use_container_width=True):
-                if input_issue.strip():
+        # --- 优化2：船舶问题板块 (提交后重置) ---
+        with col2:
+            st.subheader(f"📝 本周填报 - {selected_ship}")
+
+            # 绑定 session_state 实现自动清空
+            issue_val = st.text_area(
+                "本周船舶问题：",
+                value=st.session_state.drafts[ship_id],
+                height=350,
+                key=f"ta_{ship_id}"
+            )
+            # 实时保存草稿
+            st.session_state.drafts[ship_id] = issue_val
+
+            remark_val = st.text_input("备注 (选填)", key=f"ri_{ship_id}")
+
+            if st.button("🚀 提交并同步", use_container_width=True):
+                if issue_val.strip():
                     with get_engine().begin() as conn:
                         conn.execute(
                             text(
                                 "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
-                            {"sid": ship_id, "dt": datetime.now().date(), "iss": input_issue, "rem": remark}
+                            {"sid": ship_id, "dt": datetime.now().date(), "iss": issue_val, "rem": remark_val}
                         )
                     st.success(f"✅ {selected_ship} 提交成功！")
 
-                    # 提交成功后，清空该船的草稿
+                    # --- 核心优化：成功提交后彻底重置该船的草稿 ---
                     st.session_state.drafts[ship_id] = ""
                     st.cache_data.clear()
-                    st.rerun()  # 刷新页面以清空输入框
+                    st.rerun()  # 强制触发重新渲染，清空文本框内容
                 else:
-                    st.warning("⚠️ 填写内容不能为空")
+                    st.warning("⚠️ 内容不能为空")
 
-# --- Tab 2: 管理员控制台 (仅自己/Admin可见) ---
+# --- Tab 2: 管理员控制台 (优化版：勾选删除功能) ---
 if st.session_state.role == 'admin':
     with current_tab[1]:
-        st.header("🛠️ 管理员数据控制中心")
+        st.header("🛠️ 数据维护中心")
 
-        # 1. 批量上传 (Excel)
-        st.subheader("1. 批量上传船舶清单")
-        up_file = st.file_uploader("上传 Excel (列名: ship_name, manager_name)", type=["xlsx"])
-        if up_file:
-            if st.button("确认导入并覆盖旧数据"):
-                df_new = pd.read_excel(up_file)
-                with get_engine().begin() as conn:
-                    conn.execute(text("TRUNCATE TABLE ships RESTART IDENTITY CASCADE"))
-                    for _, row in df_new.iterrows():
-                        conn.execute(
-                            text("INSERT INTO ships (ship_name, manager_name) VALUES (:s, :m)"),
-                            {"s": row['ship_name'], "m": row['manager_name']}
-                        )
-                st.success(f"成功导入 {len(df_new)} 艘船")
-                st.cache_data.clear()
+        # --- 优化3：船舶问题信息的选择删除与全选 ---
+        st.subheader("🗑️ 记录管理 (选择性删除)")
 
-        st.divider()
+        # 获取所有待管理的记录
+        with get_engine().connect() as conn:
+            all_reps_query = text("""
+                SELECT r.id, s.ship_name as "船名", r.report_date as "日期", r.this_week_issue as "问题内容"
+                FROM reports r
+                JOIN ships s ON r.ship_id = s.id
+                ORDER BY r.report_date DESC
+            """)
+            manage_df = pd.read_sql_query(all_reps_query, conn)
 
-        # 2. 数据删除与查看
-        st.subheader("2. 数据库概览与清理")
-        col_a, col_b = st.columns([2, 1])
-        with col_a:
-            all_reports = pd.read_sql_query("SELECT * FROM reports LIMIT 100", get_engine())
-            st.write("最新 100 条填报记录：", all_reports)
-        with col_b:
-            st.warning("危险操作区")
-            if st.button("⚠️ 清空所有填报记录"):
-                with get_engine().begin() as conn:
-                    conn.execute(text("DELETE FROM reports"))
-                st.success("记录已全部清空")
-                st.cache_data.clear()
+        if not manage_df.empty:
+            # 加入勾选列
+            manage_df.insert(0, "选择", False)
 
-# --- Tab 3: 报表与会议材料 (所有角色可见) ---
-with current_tab[-1]:
-    st.subheader("📂 导出汇总")
-    if st.button("生成本周周报材料"):
-        df_summary = export_utils.get_report_data()
-        if not df_summary.empty:
-            st.dataframe(df_summary)
-            # 调用你之前的 PPT/Excel 生成函数
-            ppt_file = export_utils.generate_ppt(df_summary, "Weekly_Meeting.pptx")
-            with open(ppt_file, "rb") as f:
-                st.download_button("📥 下载会议 PPT", f, file_name=ppt_file)
+            # 全选功能
+            select_all = st.checkbox("全选所有记录")
+            if select_all:
+                manage_df["选择"] = True
+
+            # 使用数据编辑器进行勾选操作
+            edited_df = st.data_editor(
+                manage_df,
+                hide_index=True,
+                column_config={"选择": st.column_config.CheckboxColumn(required=True)},
+                disabled=["船名", "日期", "问题内容"],
+                use_container_width=True
+            )
+
+            # 筛选出被选中的 ID
+            selected_ids = edited_df[edited_df["选择"] == True]["id"].tolist()
+
+            if selected_ids:
+                if st.button(f"🗑️ 删除选中的 {len(selected_ids)} 条记录", type="primary"):
+                    st.session_state.show_confirm = True  # 开启二次确认状态
+
+            # --- 系统再次询问用户 (二次确认逻辑) ---
+            if st.session_state.get('show_confirm', False):
+                st.warning(f"⚠️ 确定要永久删除这 {len(selected_ids)} 条记录吗？此操作不可撤销。")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("❌ 取消", use_container_width=True):
+                        st.session_state.show_confirm = False
+                        st.rerun()
+                with c2:
+                    if st.button("🔥 确认删除", use_container_width=True):
+                        with get_engine().begin() as conn:
+                            conn.execute(
+                                text("DELETE FROM reports WHERE id IN :ids"),
+                                {"ids": tuple(selected_ids)}
+                            )
+                        st.success("选定记录已成功删除")
+                        st.session_state.show_confirm = False
+                        st.cache_data.clear()
+                        st.rerun()
         else:
-            st.info("本周尚无填报数据。")
+            st.info("当前数据库中无填报记录。")
