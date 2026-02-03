@@ -142,3 +142,34 @@ if st.button("🔍 生成本周汇总报告", type="secondary"):
                     st.download_button("📥 下载 PPT 幻灯片", f, file_name=ppt_file, use_container_width=True)
         else:
             st.info("💡 数据库中暂无本周填报记录。")
+
+# --- 管理员：批量导入功能 ---
+with st.sidebar.expander("🛠️ 管理员工具"):
+    uploaded_file = st.file_uploader("上传船舶清单 (Excel)", type=["xlsx"])
+    if uploaded_file:
+        if st.button("🚀 开始导入数据库"):
+            try:
+                # 1. 读取 Excel
+                df_new = pd.read_excel(uploaded_file)
+
+                # 2. 连接数据库
+                engine = get_engine()
+                with engine.begin() as conn:
+                    # 先清空旧数据 (谨慎操作，建议备份)
+                    conn.execute(text("TRUNCATE TABLE ships RESTART IDENTITY CASCADE"))
+
+                    # 3. 批量写入 (使用 PostgreSQL 语法)
+                    # 50 艘船的写入效率公式：T ≈ (N / Batch) * Latency
+                    # 在新加坡本地网络下，这将是毫秒级的操作
+                    for _, row in df_new.iterrows():
+                        conn.execute(
+                            text("INSERT INTO ships (ship_name, manager_name) VALUES (:s, :m)"),
+                            {"s": row['ship_name'], "m": row['manager_name']}
+                        )
+
+                st.success(f"✅ 成功导入 {len(df_new)} 艘船舶！")
+                # 4. 关键：清除缓存，让网页立即显示新数据
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"导入失败: {e}")
