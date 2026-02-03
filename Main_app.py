@@ -10,6 +10,20 @@ if 'drafts' not in st.session_state:
     st.session_state.drafts = {}
 
 # --- Tab 1: 数据填写与历史查询 (优化版) ---
+# --- 必须在“数据填写”逻辑之前定义这部分 ---
+
+# 1. 根据角色定义有哪些选项卡
+tabs_list = ["数据填写"]
+if st.session_state.role == 'admin':
+    tabs_list.append("管理员控制台")
+tabs_list.append("报表与会议材料")
+
+# 2. 正式创建选项卡组件 (这是报错的关键！)
+current_tab = st.tabs(tabs_list)
+
+# --- 之后才能开始使用 with current_tab[0] ---
+with current_tab[0]:
+    # 之前优化的“数据填写”代码放这里...
 with current_tab[0]:
     if ships_df.empty:
         st.warning("暂无分配给您的船舶。")
