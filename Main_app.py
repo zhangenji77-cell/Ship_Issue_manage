@@ -376,54 +376,107 @@ if st.session_state.role == 'admin':
 # --- Tab 最后: 报表导出 ---
 # --- Tab 最后: 报表中心 (权限隔离导出) ---
 with tabs[-1]:
-    st.subheader("自动化报表导出")
+    st.subheader("自动化报表导出与预览")
+
+    # 1. 日期选择区域
     c1, c2 = st.columns(2)
     with c1:
-        start_d = st.date_input("起始日期", value=datetime.now() - timedelta(days=7))
+        start_d = st.date_input("起始日期", value=datetime.now() - timedelta(days=7), key="rep_start")
     with c2:
-        end_d = st.date_input("截止日期", value=datetime.now())
+        end_d = st.date_input("截止日期", value=datetime.now(), key="rep_end")
 
+    # 2. 获取数据 (包含权限隔离逻辑)
     with get_engine().connect() as conn:
-        # 1. 定义基础 SQL 语句
-        # 注意：PostgreSQL 别名使用双引号
         query = """
-            SELECT r.report_date, s.ship_name, r.this_week_issue, r.remarks, s.manager_name
-            FROM reports r 
-            JOIN ships s ON r.ship_id = s.id
-            WHERE r.report_date BETWEEN :s AND :e 
-            AND r.is_deleted_by_user = FALSE
-        """
+                SELECT r.report_date as "日期", s.ship_name as "船名", 
+                       r.this_week_issue as "填报内容", s.manager_name as "负责人"
+                FROM reports r 
+                JOIN ships s ON r.ship_id = s.id
+                WHERE r.report_date BETWEEN :s AND :e 
+                AND r.is_deleted_by_user = FALSE
+            """
         params = {"s": start_d, "e": end_d}
 
-        # ✅ 2. 权限隔离核心逻辑：
-        # 如果角色不是 admin，则强制增加 manager_name 过滤条件
+        # ✅ 只有普通用户才进行负责人过滤
         if st.session_state.role != 'admin':
             query += " AND s.manager_name = :u"
             params["u"] = st.session_state.username
 
         query += " ORDER BY r.report_date DESC"
-
-        # 3. 执行查询
         export_df = pd.read_sql_query(text(query), conn, params=params)
 
+    # --- ✅ 新增功能：搜索预览选项 ---
+    st.write("---")
+    # 使用 use_container_width 让按钮铺满，更易点击
+    if st.button("搜索并预览所选日期内的填报信息", use_container_width=True):
+        if not export_df.empty:
+            st.success(f"✅ 已找到 {len(export_df)} 条记录")
+
+            # 为了让预览更整洁，这里对预览数据也进行一次编号处理
+            preview_df = export_df.copy()
+
+
+            def preview_clean(text):
+                lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in str(text).split('\n') if l.strip()]
+                return "\n".join([f"{i + 1}. {t}" for i, t in enumerate(lines)])
+
+
+            preview_df["填报内容"] = preview_df["填报内容"].apply(preview_clean)
+
+            # 在网页上展示交互式表格
+            st.dataframe(
+                preview_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "填报内容": st.column_config.TextColumn("详细内容 (已自动编号)", width="large"),
+                    "日期": st.column_config.DateColumn("日期")
+                }
+            )
+        else:
+            st.warning("⚠️ 该日期范围内没有找到任何填报记录。")
+
+    st.write("---")
+
+    # 3. 下载功能区域 (保持原有 generate_custom_excel 调用不变)
     if not export_df.empty:
-        st.write(f"已检索到 {len(export_df)} 条相关记录")
+        # 将预览用的中文列名转回函数需要的英文名
+        excel_prep_df = export_df.rename(columns={
+            "负责人": "manager_name",
+            "船名": "ship_name",
+            "填报内容": "this_week_issue"
+        })
+
         bc1, bc2 = st.columns(2)
         with bc1:
-            # 调用之前优化过的 excel 生成函数
-            excel_bin = generate_custom_excel(export_df)
+            excel_bin = generate_custom_excel(excel_prep_df)
             st.download_button(
                 label="下载 Excel 报表",
                 data=excel_bin,
-                file_name=f"Ship_Report_{start_d}_to_{end_d}.xlsx",
+                file_name=f"Trust_Ship_Report_{start_d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-        # 管理员可以额外生成 PPT
+
         if st.session_state.role == 'admin':
             with bc2:
-                if st.button("生成 PPT 汇总"):
-                    ppt_bin = create_ppt_report(export_df, start_d, end_d)
-                    st.download_button("点击下载 PPT", ppt_bin, f"Summary_{start_d}.pptx")
+                if st.button("📽️ 生成 PPT 汇总", use_container_width=True):
+                    ppt_bin = create_ppt_report(excel_prep_df, start_d, end_d)
+                    st.download_button("点击下载 PPT", ppt_bin, f"Summary_{start_d}.pptx", use_container_width=True)
     else:
-        st.info("💡 该日期范围内暂无您可以查看的数据。")
+        st.info("该日期范围内暂无您可以查看的数据。")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
