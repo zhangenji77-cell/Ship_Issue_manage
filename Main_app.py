@@ -290,38 +290,47 @@ with tabs[0]:
                 st.info("该船暂无历史。")
 
         # B. 填报板块 (右侧)
-        with col_input:
-            st.subheader(f"填报 - {selected_ship}")
+                # B. 填报板块 (右侧)
+                with col_input:
+                    st.subheader(f"填报 - {selected_ship}")
 
-            # ✅ 一键导入该船最新内容 (修正后的 SQL)
-            if st.button("一键导入该船最近填报内容", key=f"import_{ship_id}", use_container_width=True):
-                with get_engine().connect() as conn:
-                    last_rec = conn.execute(text(
-                        "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
-                                            {"sid": ship_id}).fetchone()
-                    if last_rec:
-                        st.session_state.drafts[ship_id] = last_rec[0]
-                        st.success("已载入最新内容。");
-                        time.sleep(0.5);
-                        st.rerun()
-                    else:
-                        st.warning("未找到历史记录。")
+                    # ✅ 修正：一键导入逻辑
+                    if st.button("一键导入该船最近填报内容", key=f"import_{ship_id}", use_container_width=True):
+                        with get_engine().connect() as conn:
+                            last_rec = conn.execute(text(
+                                "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
+                                {"sid": ship_id}).fetchone()
+                            if last_rec:
+                                # 💡 核心修改：必须直接更新以 ta_ 开头的 key 值，文本框才会刷新
+                                st.session_state[f"ta_{ship_id}"] = last_rec[0]
+                                st.session_state.drafts[ship_id] = last_rec[0]
+                                st.success("已载入最新内容。")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.warning("未找到历史记录。")
 
-            if ship_id not in st.session_state.drafts: st.session_state.drafts[ship_id] = ""
-            issue_v = st.text_area("本周问题 (分条换行):", value=st.session_state.drafts[ship_id], height=350,
-                                   key=f"ta_{ship_id}")
-            st.session_state.drafts[ship_id] = issue_v
-            remark_v = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
+                    # ✅ 修正：文本框定义（移除 value 参数，改用 key 自动同步）
+                    issue_v = st.text_area(
+                        "本周问题 (分条换行):",
+                        height=350,
+                        key=f"ta_{ship_id}"
+                    )
+                    st.session_state.drafts[ship_id] = issue_v
 
-            if st.button("提交填报数据", use_container_width=True):
-                if issue_v.strip():
-                    with get_engine().begin() as conn:
-                        conn.execute(text(
-                            "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
-                                     {"sid": ship_id, "dt": datetime.now().date(), "iss": issue_v, "rem": remark_v})
-                    st.success("提交成功！");
-                    st.session_state.drafts[ship_id] = "";
-                    st.rerun()
+                    remark_v = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
+
+                    if st.button("提交数据", use_container_width=True):
+                        if issue_v.strip():
+                            with get_engine().begin() as conn:
+                                conn.execute(text(
+                                    "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
+                                    {"sid": ship_id, "dt": datetime.now().date(), "iss": issue_v, "rem": remark_v})
+                            st.success("提交成功！")
+                            # 提交后清理状态
+                            st.session_state[f"ta_{ship_id}"] = ""
+                            st.session_state.drafts[ship_id] = ""
+                            st.rerun()
 
         # C. 底部导航
         st.divider()
@@ -353,7 +362,7 @@ if st.session_state.role == 'admin':
 
             # 批量删除逻辑
             to_del = ed_df[ed_df["选择"] == True]["id"].tolist()
-            if to_del and st.button("🗑️ 执行批量物理删除"):
+            if to_del and st.button("删除"):
                 with get_engine().begin() as conn:
                     conn.execute(text("DELETE FROM reports WHERE id IN :ids"), {"ids": tuple(to_del)})
                 st.success(f"已删除 {len(to_del)} 条记录")
