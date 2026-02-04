@@ -211,13 +211,17 @@ t_labels.append("报表中心")
 tabs = st.tabs(t_labels)
 
 # --- Tab 1: 业务填报 (核心：全时段修改 + 删除确认) ---
+# --- Tab 1: 业务填报 (核心：全时段修改 + 修复填写框显示) ---
 with tabs[0]:
     if ships_df.empty:
         st.warning("⚠️ 暂无分配船舶。")
     else:
+        # 顶部选择与导航
         selected_ship = st.selectbox("选择船舶", ships_df['ship_name'].tolist(), index=st.session_state.ship_index)
         ship_id = int(ships_df[ships_df['ship_name'] == selected_ship]['id'].iloc[0])
         st.divider()
+
+        # 布局：左侧历史，右侧填报
         col_hist, col_input = st.columns([1.2, 1])
 
         # A. 历史记录回溯 (左侧)
@@ -226,115 +230,73 @@ with tabs[0]:
             with get_engine().connect() as conn:
                 h_df = pd.read_sql_query(text(
                     "SELECT id, report_date, this_week_issue, remarks FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 10"),
-                                         conn, params={"sid": ship_id})
+                    conn, params={"sid": ship_id})
 
             if not h_df.empty:
                 for idx, row in h_df.iterrows():
-                    with st.expander(f"{row['report_date']} 内容详情"):
-                        # ✅ 修改功能：移除日期限制，现在可以一直修改
+                    with st.expander(f" {row['report_date']} 内容详情"):
                         if st.session_state.editing_id == row['id']:
-                            new_val = st.text_area("正在修改内容:", value=row['this_week_issue'],
-                                                   key=f"edit_v_{row['id']}")
-                            new_rem = st.text_input("修改备注:", value=row['remarks'] or "", key=f"edit_r_{row['id']}")
-                            c1, c2 = st.columns(2)
-                            with c1:
-                                if st.button("保存更新", key=f"save_{row['id']}"):
-                                    with get_engine().begin() as conn:
-                                        conn.execute(text(
-                                            "UPDATE reports SET this_week_issue = :t, remarks = :r WHERE id = :id"),
-                                                     {"t": new_val, "r": new_rem, "id": row['id']})
-                                    st.session_state.editing_id = None;
-                                    st.rerun()
-                            with c2:
-                                if st.button("取消", key=f"canc_e_{row['id']}"):
-                                    st.session_state.editing_id = None;
-                                    st.rerun()
+                            new_val = st.text_area("修改内容:", value=row['this_week_issue'], key=f"ed_{row['id']}")
+                            if st.button("保存更新", key=f"save_{row['id']}"):
+                                with get_engine().begin() as conn:
+                                    conn.execute(text("UPDATE reports SET this_week_issue = :t WHERE id = :id"),
+                                                 {"t": new_val, "id": row['id']})
+                                st.session_state.editing_id = None;
+                                st.rerun()
                         else:
-
-                            # ✅ 新增：对历史记录内容进行即时清洗和重新编码展示
+                            # 自动清洗并展示带编号的内容
                             raw_content = row['this_week_issue']
-                            if raw_content:
-                                # 按行拆分 -> 剔除原有编号 -> 重新加 1. 2. 3.
-                                lines = raw_content.split('\n')
-                                clean_lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in lines if l.strip()]
-                                numbered_content = "\n".join([f"{i + 1}. {text}" for i, text in enumerate(clean_lines)])
-                            else:
-                                numbered_content = "无内容"
+                            clean_lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in raw_content.split('\n') if
+                                           l.strip()]
+                            st.text("\n".join([f"{i + 1}. {text}" for i, text in enumerate(clean_lines)]))
 
-                            st.text(numbered_content)  # 展示重新编码后的内容
-                            st.caption(f"备注: {row['remarks'] or '无'}")
                             cb1, cb2 = st.columns(2)
-                            with cb1:
-                                if st.button("修改", key=f"eb_{row['id']}"):
-                                    st.session_state.editing_id = row['id'];
-                                    st.rerun()
-                            with cb2:
-                                if st.button("删除", key=f"db_{row['id']}"):
-                                    st.session_state.confirm_del_id = row['id'];
-                                    st.rerun()
-
-                # ✅ 删除二次确认逻辑
-                if st.session_state.confirm_del_id:
-                    st.error(f"确定删除记录 (ID: {st.session_state.confirm_del_id})？")
-                    d_b1, d_b2 = st.columns(2)
-                    with d_b1:
-                        if st.button("取消", key="no_del"): st.session_state.confirm_del_id = None; st.rerun()
-                    with d_b2:
-                        if st.button("确认执行", key="yes_del"):
-                            with get_engine().begin() as conn:
-                                conn.execute(text("UPDATE reports SET is_deleted_by_user = TRUE WHERE id = :id"),
-                                             {"id": st.session_state.confirm_del_id})
-                            st.session_state.confirm_del_id = None;
-                            st.rerun()
+                            if cb1.button("修改", key=f"eb_{row['id']}"): st.session_state.editing_id = row[
+                                'id']; st.rerun()
+                            if cb2.button("删除", key=f"db_{row['id']}"): st.session_state.confirm_del_id = row[
+                                'id']; st.rerun()
             else:
                 st.info("该船暂无历史。")
 
-        # B. 填报板块 (右侧)
-                # B. 填报板块 (右侧)
-                with col_input:
-                    st.subheader(f"填报 - {selected_ship}")
+        # B. ✅ 填报板块 (右侧 - 确保这部分代码完整且缩进正确)
+        with col_input:
+            st.subheader(f"填报 - {selected_ship}")
 
-                    # ✅ 修正：一键导入逻辑
-                    if st.button("一键导入该船最近填报内容", key=f"import_{ship_id}", use_container_width=True):
-                        with get_engine().connect() as conn:
-                            last_rec = conn.execute(text(
-                                "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
-                                {"sid": ship_id}).fetchone()
-                            if last_rec:
-                                # 💡 核心修改：必须直接更新以 ta_ 开头的 key 值，文本框才会刷新
-                                st.session_state[f"ta_{ship_id}"] = last_rec[0]
-                                st.session_state.drafts[ship_id] = last_rec[0]
-                                st.success("已载入最新内容。")
-                                time.sleep(0.5)
-                                st.rerun()
-                            else:
-                                st.warning("未找到历史记录。")
+            # 1. 一键导入逻辑
+            if st.button("一键导入最近填报", key=f"import_{ship_id}", use_container_width=True):
+                with get_engine().connect() as conn:
+                    last_rec = conn.execute(text(
+                        "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
+                        {"sid": ship_id}).fetchone()
+                    if last_rec:
+                        # 强制刷新文本框状态
+                        st.session_state[f"ta_{ship_id}"] = last_rec[0]
+                        st.success("已载入最近内容，您可以继续编辑。")
+                        time.sleep(0.5);
+                        st.rerun()
+                    else:
+                        st.warning("未找到历史记录。")
 
-                    # ✅ 修正：文本框定义（移除 value 参数，改用 key 自动同步）
-                    issue_v = st.text_area(
-                        "本周问题 (分条换行):",
-                        height=350,
-                        key=f"ta_{ship_id}"
-                    )
-                    st.session_state.drafts[ship_id] = issue_v
+            # 2. 文本输入框 (使用 key 绑定 session_state)
+            if f"ta_{ship_id}" not in st.session_state:
+                st.session_state[f"ta_{ship_id}"] = ""
 
-                    remark_v = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
+            issue_v = st.text_area("本周问题 (每条一行):", height=350, key=f"ta_{ship_id}")
+            remark_v = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
 
-                    if st.button("提交数据", use_container_width=True):
-                        if issue_v.strip():
-                            with get_engine().begin() as conn:
-                                conn.execute(text(
-                                    "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
-                                    {"sid": ship_id, "dt": datetime.now().date(), "iss": issue_v, "rem": remark_v})
-                            st.success("提交成功！")
-                            # 提交后清理状态
-                            st.session_state[f"ta_{ship_id}"] = ""
-                            st.session_state.drafts[ship_id] = ""
-                            st.rerun()
+            if st.button("提交填报数据", use_container_width=True):
+                if issue_v.strip():
+                    with get_engine().begin() as conn:
+                        conn.execute(text(
+                            "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
+                            {"sid": ship_id, "dt": datetime.now().date(), "iss": issue_v, "rem": remark_v})
+                    st.success("提交成功！")
+                    st.session_state[f"ta_{ship_id}"] = ""  # 提交后清空
+                    st.rerun()
 
         # C. 底部导航
         st.divider()
-        n1, n2, n3 = st.columns([1, 4, 1])
+        n1, _, n3 = st.columns([1, 4, 1])
         with n1:
             if st.button("⬅️ 上一艘"): st.session_state.ship_index = (st.session_state.ship_index - 1) % len(
                 ships_df); st.rerun()
