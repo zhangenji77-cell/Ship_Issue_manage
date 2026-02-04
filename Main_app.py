@@ -47,9 +47,12 @@ def get_engine():
 
 # --- 2. 报表工具逻辑 ---
 
+import re  # 必须在文件顶部导入 re 库
+
+
 def generate_custom_excel(df):
     """
-    生成带黑色边框、微软雅黑、Issue内容左对齐且自动编号的 Excel 报表
+    生成 Excel：清洗旧编号，重新进行顺序编码，C列左对齐
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -62,9 +65,8 @@ def generate_custom_excel(df):
     black_border = Border(top=thin_side, left=thin_side, right=thin_side, bottom=thin_side)
 
     # --- 1. 第一行：Report Date (居中) ---
-    today_str = datetime.now().strftime('%Y-%m-%d')
     ws.merge_cells('A1:C1')
-    ws['A1'] = f"Report Date: {today_str}"
+    ws['A1'] = f"Report Date: {datetime.now().strftime('%Y-%m-%d')}"
     ws['A1'].font = Font(name='微软雅黑', size=12, bold=True)
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
 
@@ -76,58 +78,59 @@ def generate_custom_excel(df):
         cell.alignment = Alignment(horizontal='center', vertical='center')
         cell.border = black_border
 
-    # --- 3. 数据预处理：合并相同船名的内容并进行自动编号 ---
-    def format_issue_with_numbers(series):
-        # 过滤空内容并转换为列表
-        issues = [str(x).strip() for x in series if x and str(x).strip()]
-        if not issues:
-            return ""
-        # 自动添加 1. 2. 3. 序号并换行拼接
-        return "\n".join([f"{i + 1}. {text}" for i, text in enumerate(issues)])
+    # --- 3. 数据预处理：清洗内容并重新编号 ---
+    def clean_and_reformat_issue(series):
+        all_lines = []
+        for content in series:
+            if content:
+                # 按行拆分
+                lines = str(content).split('\n')
+                for line in lines:
+                    # ✅ 核心逻辑：使用正则剔除行首的数字、点、顿号和空格
+                    # 例如把 "1. 内容" 或 "2、内容" 变成 "内容"
+                    clean_line = re.sub(r'^\d+[\.、\s]*', '', line.strip())
+                    if clean_line:
+                        all_lines.append(clean_line)
 
+        if not all_lines: return ""
+        # ✅ 核心逻辑：对所有提取出的纯内容重新进行 1. 2. 3. 编码
+        return "\n".join([f"{i + 1}. {text}" for i, text in enumerate(all_lines)])
+
+    # 按负责人和船名分组
     df_grouped = df.groupby(['manager_name', 'ship_name'])['this_week_issue'].apply(
-        format_issue_with_numbers).reset_index()
+        clean_and_reformat_issue).reset_index()
     df_grouped = df_grouped.sort_values(by='manager_name')
 
-    # --- 4. 数据填充与样式设置 ---
+    # --- 4. 填充数据 ---
     current_row = 3
     for manager, group in df_grouped.groupby('manager_name', sort=False):
         start_merge_row = current_row
-        num_rows_for_manager = len(group)
-
         for _, row_data in group.iterrows():
-            # A列：管理人员 (居中)
-            cell_a = ws.cell(row=current_row, column=1, value=manager)
-            cell_a.font = font_yahei
-            cell_a.border = black_border
-            cell_a.alignment = Alignment(horizontal='center', vertical='center')
+            # A列/B列：负责人/船名 (居中)
+            for col in [1, 2]:
+                cell = ws.cell(row=current_row, column=col,
+                               value=row_data['manager_name'] if col == 1 else row_data['ship_name'])
+                cell.font = font_yahei
+                cell.border = black_border
+                cell.alignment = Alignment(horizontal='center', vertical='center')
 
-            # B列：船名 (居中)
-            cell_b = ws.cell(row=current_row, column=2, value=row_data['ship_name'])
-            cell_b.font = font_yahei
-            cell_b.border = black_border
-            cell_b.alignment = Alignment(horizontal='center', vertical='center')
-
-            # C列：船舶情况 (左对齐 + 自动编号)
+            # C列：Issue (左对齐 + 重新编号后的内容)
             cell_c = ws.cell(row=current_row, column=3, value=row_data['this_week_issue'])
             cell_c.font = font_yahei
             cell_c.border = black_border
-            # ✅ 修改核心：horizontal='left' 实现左对齐，但保持垂直居中和换行
+            # ✅ C列内容左对齐，垂直居中
             cell_c.alignment = Alignment(wrap_text=True, horizontal='left', vertical='center')
-
             current_row += 1
 
-        # 合并 A 列管理人员单元格
-        if num_rows_for_manager > 1:
-            ws.merge_cells(start_row=start_merge_row, start_column=1,
-                           end_row=current_row - 1, end_column=1)
+        # 合并 A 列负责人
+        if len(group) > 1:
+            ws.merge_cells(start_row=start_merge_row, start_column=1, end_row=current_row - 1, end_column=1)
             for r in range(start_merge_row, current_row):
                 ws.cell(row=r, column=1).border = black_border
 
-    # 设置列宽
     ws.column_dimensions['A'].width = 20
     ws.column_dimensions['B'].width = 25
-    ws.column_dimensions['C'].width = 70  # 稍微加宽以适应编号后的文本
+    ws.column_dimensions['C'].width = 70
 
     output = io.BytesIO()
     wb.save(output)
@@ -247,7 +250,18 @@ with tabs[0]:
                                     st.session_state.editing_id = None;
                                     st.rerun()
                         else:
-                            st.text(row['this_week_issue'])
+
+                            # ✅ 新增：对历史记录内容进行即时清洗和重新编码展示
+                            raw_content = row['this_week_issue']
+                            if raw_content:
+                                # 按行拆分 -> 剔除原有编号 -> 重新加 1. 2. 3.
+                                lines = raw_content.split('\n')
+                                clean_lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in lines if l.strip()]
+                                numbered_content = "\n".join([f"{i + 1}. {text}" for i, text in enumerate(clean_lines)])
+                            else:
+                                numbered_content = "无内容"
+
+                            st.text(numbered_content)  # 展示重新编码后的内容
                             st.caption(f"备注: {row['remarks'] or '无'}")
                             cb1, cb2 = st.columns(2)
                             with cb1:
