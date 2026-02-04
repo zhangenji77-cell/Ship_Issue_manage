@@ -362,6 +362,7 @@ if st.session_state.role == 'admin':
             st.info("暂无全局填报数据。")
 
 # --- Tab 最后: 报表导出 ---
+# --- Tab 最后: 报表中心 (权限隔离导出) ---
 with tabs[-1]:
     st.subheader("自动化报表导出")
     c1, c2 = st.columns(2)
@@ -371,32 +372,46 @@ with tabs[-1]:
         end_d = st.date_input("截止日期", value=datetime.now())
 
     with get_engine().connect() as conn:
-        # SQL 顺序：日期, 船名, 问题, 备注, 负责人
-        export_df = pd.read_sql_query(text("""
+        # 1. 定义基础 SQL 语句
+        # 注意：PostgreSQL 别名使用双引号
+        query = """
             SELECT r.report_date, s.ship_name, r.this_week_issue, r.remarks, s.manager_name
-            FROM reports r JOIN ships s ON r.ship_id = s.id
-            WHERE r.report_date BETWEEN :s AND :e AND r.is_deleted_by_user = FALSE
-            ORDER BY r.report_date DESC
-        """), conn, params={"s": start_d, "e": end_d})
+            FROM reports r 
+            JOIN ships s ON r.ship_id = s.id
+            WHERE r.report_date BETWEEN :s AND :e 
+            AND r.is_deleted_by_user = FALSE
+        """
+        params = {"s": start_d, "e": end_d}
+
+        # ✅ 2. 权限隔离核心逻辑：
+        # 如果角色不是 admin，则强制增加 manager_name 过滤条件
+        if st.session_state.role != 'admin':
+            query += " AND s.manager_name = :u"
+            params["u"] = st.session_state.username
+
+        query += " ORDER BY r.report_date DESC"
+
+        # 3. 执行查询
+        export_df = pd.read_sql_query(text(query), conn, params=params)
 
     if not export_df.empty:
+        st.write(f"已检索到 {len(export_df)} 条相关记录")
         bc1, bc2 = st.columns(2)
         with bc1:
-            if not export_df.empty:
-                bc1, bc2 = st.columns(2)
-                with bc1:
-                    # ✅ 这里改用新的函数名
-                    excel_bin = generate_custom_excel(export_df)
-
-                    st.download_button(
-                        label="下载自定义格式 Excel",
-                        data=excel_bin,
-                        file_name=f"Report_{start_d}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True
-                    )
-        with bc2:
-            if st.session_state.role == 'admin':
+            # 调用之前优化过的 excel 生成函数
+            excel_bin = generate_custom_excel(export_df)
+            st.download_button(
+                label="下载 Excel 报表",
+                data=excel_bin,
+                file_name=f"Ship_Report_{start_d}_to_{end_d}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        # 管理员可以额外生成 PPT
+        if st.session_state.role == 'admin':
+            with bc2:
                 if st.button("生成 PPT 汇总"):
                     ppt_bin = create_ppt_report(export_df, start_d, end_d)
-                    st.download_button("点击下载 PPT", ppt_bin, f"Meeting_{start_d}.pptx")
+                    st.download_button("点击下载 PPT", ppt_bin, f"Summary_{start_d}.pptx")
+    else:
+        st.info("💡 该日期范围内暂无您可以查看的数据。")
