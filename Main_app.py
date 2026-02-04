@@ -225,8 +225,31 @@ with tabs[0]:
         col_hist, col_input = st.columns([1.2, 1])
 
         # A. 历史记录回溯 (左侧)
+        # A. 历史记录回溯 (左侧)
         with col_hist:
-            st.subheader("历史记录")
+            st.subheader("📊 历史记录")
+
+            # ✅ 1. 二次确认逻辑移到最上方：如果有人点击了删除，这里会立刻弹出警告
+            if st.session_state.confirm_del_id:
+                st.warning(f"⚠️ 正在准备删除记录 (ID: {st.session_state.confirm_del_id})")
+                d_col1, d_col2 = st.columns(2)
+                with d_col1:
+                    if st.button("🔥 确认执行物理删除", key="confirm_real_del"):
+                        with get_engine().begin() as conn:
+                            # 执行物理删除
+                            conn.execute(text("DELETE FROM reports WHERE id = :id"),
+                                         {"id": st.session_state.confirm_del_id})
+                        st.session_state.confirm_del_id = None
+                        st.success("记录已永久删除")
+                        time.sleep(1)
+                        st.rerun()
+                with d_col2:
+                    if st.button("❌ 取消删除", key="cancel_real_del"):
+                        st.session_state.confirm_del_id = None
+                        st.rerun()
+                st.divider()
+
+            # 2. 获取并展示历史列表
             with get_engine().connect() as conn:
                 h_df = pd.read_sql_query(text(
                     "SELECT id, report_date, this_week_issue, remarks FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 10"),
@@ -234,29 +257,36 @@ with tabs[0]:
 
             if not h_df.empty:
                 for idx, row in h_df.iterrows():
-                    with st.expander(f" {row['report_date']} 内容详情"):
-                        if st.session_state.editing_id == row['id']:
+                    # ✅ 增加 expanded=True 的判断：如果正在编辑该行，保持展开
+                    is_editing = st.session_state.editing_id == row['id']
+                    with st.expander(f" {row['report_date']} 内容详情", expanded=is_editing):
+                        if is_editing:
                             new_val = st.text_area("修改内容:", value=row['this_week_issue'], key=f"ed_{row['id']}")
                             if st.button("保存更新", key=f"save_{row['id']}"):
                                 with get_engine().begin() as conn:
                                     conn.execute(text("UPDATE reports SET this_week_issue = :t WHERE id = :id"),
                                                  {"t": new_val, "id": row['id']})
-                                st.session_state.editing_id = None;
+                                st.session_state.editing_id = None
                                 st.rerun()
                         else:
-                            # 自动清洗并展示带编号的内容
+                            # 展示逻辑（保持之前的清洗编号展示）
                             raw_content = row['this_week_issue']
                             clean_lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in raw_content.split('\n') if
                                            l.strip()]
                             st.text("\n".join([f"{i + 1}. {text}" for i, text in enumerate(clean_lines)]))
 
                             cb1, cb2 = st.columns(2)
-                            if cb1.button("修改", key=f"eb_{row['id']}"): st.session_state.editing_id = row[
-                                'id']; st.rerun()
-                            if cb2.button("删除", key=f"db_{row['id']}"): st.session_state.confirm_del_id = row[
-                                'id']; st.rerun()
+                            with cb1:
+                                if st.button("修改", key=f"eb_{row['id']}"):
+                                    st.session_state.editing_id = row['id']
+                                    st.rerun()
+                            with cb2:
+                                # ✅ 点击删除后，设置 ID 并触发页面刷新
+                                if st.button("删除", key=f"db_{row['id']}"):
+                                    st.session_state.confirm_del_id = row['id']
+                                    st.rerun()
             else:
-                st.info("该船暂无历史。")
+                st.info("💡 该船暂无历史。")
 
         # B. ✅ 填报板块 (右侧 - 确保这部分代码完整且缩进正确)
         with col_input:
