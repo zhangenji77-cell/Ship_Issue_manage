@@ -8,7 +8,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 
 # --- 1. 基础配置与品牌样式 ---
-st.set_page_config(page_title="Trust Ship 船舶管理系统", layout="wide", page_icon="🚢")
+st.set_page_config(page_title="Trust Ship 船舶管理系统", layout="wide")
 
 # 注入自定义 CSS 提升 UI 专业感
 st.markdown("""
