@@ -313,26 +313,30 @@ with tabs[0]:
             if st.button("下一艘 ➡️"): st.session_state.ship_index = (st.session_state.ship_index + 1) % len(
                 ships_df); st.rerun()
 # --- Tab 1: 管理员控制台 (新增部分) ---
+# --- Tab 1: 管理员控制台 (修正 PostgreSQL 别名引号) ---
 if st.session_state.role == 'admin':
     with tabs[1]:
-        st.subheader("全局管理视图")
-        # 从数据库读取所有记录
+        st.subheader("🛠️ 全局管理视图")
+
+        # ✅ 这里是修正核心：将别名从 '负责人' 改为 "负责人" (使用双引号)
         m_df = pd.read_sql_query(text("""
-            SELECT r.id, s.manager_name as '负责人', s.ship_name as '船名', r.report_date as '日期', r.this_week_issue as '内容'
+            SELECT r.id, s.manager_name as "负责人", s.ship_name as "船名", 
+                   r.report_date as "日期", r.this_week_issue as "内容"
             FROM reports r JOIN ships s ON r.ship_id = s.id 
             ORDER BY r.report_date DESC
         """), get_engine())
 
         if not m_df.empty:
             m_df.insert(0, "选择", False)
-            # 使用数据编辑器展示，支持勾选
+            # 使用数据编辑器展示
             ed_df = st.data_editor(m_df, hide_index=True, use_container_width=True)
 
-            # 获取勾选的 ID 并执行删除
+            # 批量删除逻辑
             to_del = ed_df[ed_df["选择"] == True]["id"].tolist()
-            if to_del and st.button("执行删除"):
+            if to_del and st.button("🗑️ 执行批量物理删除"):
                 with get_engine().begin() as conn:
                     conn.execute(text("DELETE FROM reports WHERE id IN :ids"), {"ids": tuple(to_del)})
+                st.success(f"已删除 {len(to_del)} 条记录")
                 st.rerun()
         else:
             st.info("暂无全局填报数据。")
