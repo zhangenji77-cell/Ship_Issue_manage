@@ -49,7 +49,7 @@ def get_engine():
 
 def generate_custom_excel(df):
     """
-    生成带黑色边框、微软雅黑、全居中，且合并相同船名信息的 Excel 报表
+    生成带黑色边框、微软雅黑、Issue内容左对齐且自动编号的 Excel 报表
     """
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -61,13 +61,14 @@ def generate_custom_excel(df):
     thin_side = Side(style='thin', color='000000')
     black_border = Border(top=thin_side, left=thin_side, right=thin_side, bottom=thin_side)
 
-    # --- 1. 第一行：Report Date ---
+    # --- 1. 第一行：Report Date (居中) ---
+    today_str = datetime.now().strftime('%Y-%m-%d')
     ws.merge_cells('A1:C1')
-    ws['A1'] = f"Report Date: {datetime.now().strftime('%Y-%m-%d')}"
+    ws['A1'] = f"Report Date: {today_str}"
     ws['A1'].font = Font(name='微软雅黑', size=12, bold=True)
     ws['A1'].alignment = Alignment(horizontal='center', vertical='center')
 
-    # --- 2. 第二行：表头 ---
+    # --- 2. 第二行：表头 (全部居中) ---
     headers = ['manager name', 'ship name', 'Issue']
     for col_num, header in enumerate(headers, 1):
         cell = ws.cell(row=2, column=col_num, value=header)
@@ -75,53 +76,58 @@ def generate_custom_excel(df):
         cell.alignment = Alignment(horizontal='center', vertical='center')
         cell.border = black_border
 
-    # --- 3. 数据预处理：合并相同负责人工号下、相同船名的 Issue ---
-    # 将同一个人的同一艘船的内容用换行符 \n 连接起来
+    # --- 3. 数据预处理：合并相同船名的内容并进行自动编号 ---
+    def format_issue_with_numbers(series):
+        # 过滤空内容并转换为列表
+        issues = [str(x).strip() for x in series if x and str(x).strip()]
+        if not issues:
+            return ""
+        # 自动添加 1. 2. 3. 序号并换行拼接
+        return "\n".join([f"{i + 1}. {text}" for i, text in enumerate(issues)])
+
     df_grouped = df.groupby(['manager_name', 'ship_name'])['this_week_issue'].apply(
-        lambda x: "\n".join(filter(None, x))).reset_index()
-    # 重新排序确保同一个人在一起，方便后续 A 列合并
+        format_issue_with_numbers).reset_index()
     df_grouped = df_grouped.sort_values(by='manager_name')
 
-    # --- 4. 数据填充与 A 列合并 ---
+    # --- 4. 数据填充与样式设置 ---
     current_row = 3
     for manager, group in df_grouped.groupby('manager_name', sort=False):
         start_merge_row = current_row
         num_rows_for_manager = len(group)
 
         for _, row_data in group.iterrows():
-            # A列：管理人员
+            # A列：管理人员 (居中)
             cell_a = ws.cell(row=current_row, column=1, value=manager)
             cell_a.font = font_yahei
             cell_a.border = black_border
             cell_a.alignment = Alignment(horizontal='center', vertical='center')
 
-            # B列：船名 (此时由于预处理，每个船名只会出现一次)
+            # B列：船名 (居中)
             cell_b = ws.cell(row=current_row, column=2, value=row_data['ship_name'])
             cell_b.font = font_yahei
             cell_b.border = black_border
             cell_b.alignment = Alignment(horizontal='center', vertical='center')
 
-            # C列：合并后的船舶情况
+            # C列：船舶情况 (左对齐 + 自动编号)
             cell_c = ws.cell(row=current_row, column=3, value=row_data['this_week_issue'])
             cell_c.font = font_yahei
             cell_c.border = black_border
-            # 设置居中并自动换行
-            cell_c.alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
+            # ✅ 修改核心：horizontal='left' 实现左对齐，但保持垂直居中和换行
+            cell_c.alignment = Alignment(wrap_text=True, horizontal='left', vertical='center')
 
             current_row += 1
 
-        # ✅ 合并 A 列管理人员单元格 (如果该管理员有多艘不同的船)
+        # 合并 A 列管理人员单元格
         if num_rows_for_manager > 1:
             ws.merge_cells(start_row=start_merge_row, start_column=1,
                            end_row=current_row - 1, end_column=1)
-            # 补偿合并后的边框
             for r in range(start_merge_row, current_row):
                 ws.cell(row=r, column=1).border = black_border
 
     # 设置列宽
     ws.column_dimensions['A'].width = 20
     ws.column_dimensions['B'].width = 25
-    ws.column_dimensions['C'].width = 60
+    ws.column_dimensions['C'].width = 70  # 稍微加宽以适应编号后的文本
 
     output = io.BytesIO()
     wb.save(output)
