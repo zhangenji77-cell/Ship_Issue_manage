@@ -234,7 +234,7 @@ with tabs[0]:
                 st.warning(f"⚠️ 正在准备删除记录 (ID: {st.session_state.confirm_del_id})")
                 d_col1, d_col2 = st.columns(2)
                 with d_col1:
-                    if st.button("🔥 确认执行物理删除", key="confirm_real_del"):
+                    if st.button("确认删除", key="confirm_real_del"):
                         with get_engine().begin() as conn:
                             # 执行物理删除
                             conn.execute(text("DELETE FROM reports WHERE id = :id"),
