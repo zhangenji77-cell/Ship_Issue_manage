@@ -1,13 +1,14 @@
+
+import time
+from pptx import Presentation
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import sqlalchemy
 from sqlalchemy import text
 import io
-import time
 import openpyxl
-from openpyxl.utils.dataframe import dataframe_to_rows
-from pptx import Presentation
+from openpyxl.styles import Alignment, Font, Border, Side  # <--- 必须有这一行
 
 # --- 1. 基础配置与品牌样式 ---
 st.set_page_config(page_title="Trust Ship 船舶管理系统", layout="wide")
@@ -44,23 +45,78 @@ def get_engine():
 
 # --- 2. 报表工具逻辑 ---
 
-def generate_excel_with_template(df):
-    """基于上传的 A-E 列模版生成 Excel"""
-    try:
-        wb = openpyxl.load_workbook("导出excel模版.xlsx")
-        sheet = wb.active
-        start_row = 2
-        # 对应模版顺序：日期, 船名, 问题, 备注, 负责人
-        for r_idx, row in enumerate(dataframe_to_rows(df, index=False, header=False), start_row):
-            for c_idx, value in enumerate(row, 1):
-                cell = sheet.cell(row=r_idx, column=c_idx, value=value)
-                cell.font = openpyxl.styles.Font(size=10)
-        output = io.BytesIO()
-        wb.save(output)
-        return output.getvalue()
-    except Exception as e:
-        st.error(f"Excel 导出失败: {e}")
-        return None
+# --- 2. 报表工具逻辑 ---
+
+def generate_custom_excel(df):
+    """
+    生成带黑色边框的自定义格式 Excel 报表
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Ship Report"
+
+    # 定义黑色细边框样式
+    thin_black_side = Side(style='thin', color='000000')
+    black_border = Border(top=thin_black_side, left=thin_black_side,
+                          right=thin_black_side, bottom=thin_black_side)
+
+    # --- 1. 第一行：Report Date ---
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    ws.merge_cells('A1:C1')
+    ws['A1'] = f"Report Date: {today_str}"
+    ws['A1'].font = Font(bold=True, size=12)
+    ws['A1'].alignment = Alignment(horizontal='left')
+
+    # --- 2. 第二行：表头 ---
+    headers = ['manager name', 'ship name', 'Issue']
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=2, column=col_num, value=header)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = black_border
+
+    # --- 3 & 4 & 5. 数据填充与合并 ---
+    current_row = 3
+    # 排序确保同一个人在一起
+    df = df.sort_values(by='manager_name')
+
+    for manager, group in df.groupby('manager_name', sort=False):
+        start_merge_row = current_row
+        num_ships = len(group)
+
+        for _, row_data in group.iterrows():
+            # A列：管理人员 (每一行都先设边框)
+            cell_a = ws.cell(row=current_row, column=1, value=manager)
+            cell_a.border = black_border
+
+            # B列：船舶名字
+            cell_b = ws.cell(row=current_row, column=2, value=row_data['ship_name'])
+            cell_b.border = black_border
+
+            # C列：船舶情况 (开启自动换行)
+            cell_c = ws.cell(row=current_row, column=3, value=row_data['this_week_issue'])
+            cell_c.alignment = Alignment(wrap_text=True, vertical='top')
+            cell_c.border = black_border
+            current_row += 1
+
+        # 合并 A 列管理人员单元格并居中
+        if num_ships > 1:
+            ws.merge_cells(start_row=start_merge_row, start_column=1,
+                           end_row=current_row - 1, end_column=1)
+            # 确保合并后区域的所有单元格都有黑色边框
+            for r in range(start_merge_row, current_row):
+                ws.cell(row=r, column=1).border = black_border
+
+        ws.cell(row=start_merge_row, column=1).alignment = Alignment(horizontal='center', vertical='center')
+
+    # 设置列宽
+    ws.column_dimensions['A'].width = 20
+    ws.column_dimensions['B'].width = 25
+    ws.column_dimensions['C'].width = 60
+
+    output = io.BytesIO()
+    wb.save(output)
+    return output.getvalue()
 
 
 def create_ppt_report(df, start_date, end_date):
@@ -269,9 +325,19 @@ with tabs[-1]:
     if not export_df.empty:
         bc1, bc2 = st.columns(2)
         with bc1:
-            excel_bin = generate_excel_with_template(export_df)
-            if excel_bin:
-                st.download_button("下载模版 Excel", excel_bin, f"Report_{start_d}.xlsx", "application/vnd.ms-excel")
+            if not export_df.empty:
+                bc1, bc2 = st.columns(2)
+                with bc1:
+                    # ✅ 这里改用新的函数名
+                    excel_bin = generate_custom_excel(export_df)
+
+                    st.download_button(
+                        label="📊 下载自定义格式 Excel",
+                        data=excel_bin,
+                        file_name=f"Report_{start_d}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
         with bc2:
             if st.session_state.role == 'admin':
                 if st.button("📽️ 生成 PPT 汇总"):
