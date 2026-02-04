@@ -286,11 +286,24 @@ with tabs[0]:
                                     st.session_state.confirm_del_id = row['id']
                                     st.rerun()
             else:
-                st.info("💡 该船暂无历史。")
+                st.info("该船暂无历史。")
 
         # B. ✅ 填报板块 (右侧 - 确保这部分代码完整且缩进正确)
         with col_input:
             st.subheader(f"填报 - {selected_ship}")
+            # ✅ 更改位置 1：在此处定义回调函数
+            def handle_submit(sid, iss, rem):
+                if iss.strip():
+                    with get_engine().begin() as conn:
+                        conn.execute(text(
+                            "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
+                            {"sid": sid, "dt": datetime.now().date(), "iss": iss, "rem": rem})
+
+                    # 在组件重新渲染前，安全地清空 Session State
+                    st.session_state[f"ta_{sid}"] = ""
+                    st.session_state.drafts[sid] = ""
+                    # 使用 toast 提供轻量级成功反馈
+                    st.toast(f"✅ {selected_ship} 数据提交成功！")
 
             # 1. 一键导入逻辑
             if st.button("一键导入最近填报", key=f"import_{ship_id}", use_container_width=True):
@@ -314,15 +327,13 @@ with tabs[0]:
             issue_v = st.text_area("本周问题 (每条一行):", height=350, key=f"ta_{ship_id}")
             remark_v = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
 
-            if st.button("提交填报数据", use_container_width=True):
-                if issue_v.strip():
-                    with get_engine().begin() as conn:
-                        conn.execute(text(
-                            "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
-                            {"sid": ship_id, "dt": datetime.now().date(), "iss": issue_v, "rem": remark_v})
-                    st.success("提交成功！")
-                    st.session_state[f"ta_{ship_id}"] = ""  # 提交后清空
-                    st.rerun()
+            # ✅ 更改位置 2：使用 on_click 参数绑定回调函数
+            st.button(
+                "提交填报数据",
+                use_container_width=True,
+                on_click=handle_submit,
+                args=(ship_id, issue_v, remark_v)  # 传递当前船只ID、内容和备注
+            )
 
         # C. 底部导航
         st.divider()
