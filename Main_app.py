@@ -161,8 +161,9 @@ def create_ppt_report(df, start_date, end_date):
 
     # ✅ 调整副标题位置：为了防止重叠，通常副标题也要跟着下移
     # 确保 subtitle.top 大于 title.top
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    subtitle.text = f"生成日期: {current_date}"
     subtitle.top = Inches(4.5)
-    subtitle.text = f"汇报周期: {start_date} ~ {end_date}\n生成日期: {datetime.now().strftime('%Y-%m-%d')}"
     """
     生成 PPT：完全复刻 Excel 排序逻辑，24号字，含 Logo 和致谢页
     """
