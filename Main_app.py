@@ -11,6 +11,8 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, Border, Side  # <--- 必须有这一行
 from pptx import Presentation
 from pptx.util import Inches, Pt
+from pptx.util import Inches, Pt
+from pptx.enum.text import PP_ALIGN  # ✅ 新增：用于致谢页文字居中对齐
 # 如果您还没安装，请在服务器终端运行: pip install python-pptx
 
 # --- 1. 基础配置与品牌样式 ---
@@ -141,22 +143,33 @@ def generate_custom_excel(df):
 
 
 # ✅ 在 generate_custom_excel 下方添加此函数
+# ✅ 完全替换此函数
 def create_ppt_report(df, start_date, end_date):
     """
-    将船舶数据转换为周报 PPT 幻灯片
+    生成专业 PPT：含 Logo、24号字、排序对齐及致谢页
     """
     prs = Presentation()
 
-    # 1. 标题页
-    title_slide_layout = prs.slide_layouts[0]
-    slide = prs.slides.add_slide(title_slide_layout)
-    slide.shapes.title.text = "Trust Ship 船舶周报汇总"
-    slide.placeholders[1].text = f"周期: {start_date} ~ {end_date}"
+    # --- 1. 标题页 (Slide 0) ---
+    slide_layout_title = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(slide_layout_title)
 
-    # 2. 遍历船舶生成详情页
-    for ship_name, group in df.groupby('ship_name'):
+    # ✅ 加入公司 Logo (放在标题上方，居中且尺寸适中)
+    try:
+        # 居中放置 Logo，1.5英寸宽，确保不遮挡标题
+        slide.shapes.add_picture("TSM_Logo.png", left=Inches(4.25), top=Inches(0.5), width=Inches(1.5))
+    except:
+        pass  # 如果 Logo 文件缺失，程序依然能跑
+
+    slide.shapes.title.text = "Trust Ship 船舶周报汇总"
+    slide.placeholders[1].text = f"周期: {start_date} ~ {end_date}\n生成日期: {datetime.now().strftime('%Y-%m-%d')}"
+
+    # --- 2. 详情页 (Slide 1+) ---
+    # ✅ 修改点 1：按照负责人和船名顺序生成，sort=False 保持 Excel 中的现有排序
+    for (manager, ship), group in df.groupby(['manager_name', 'ship_name'], sort=False):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = f"船舶状态: {ship_name}"
+        # 标题显示格式：船名 (负责人)
+        slide.shapes.title.text = f"船舶状态: {ship} ({manager})"
         tf = slide.placeholders[1].text_frame
         tf.word_wrap = True
 
@@ -168,7 +181,25 @@ def create_ppt_report(df, start_date, end_date):
                 p = tf.add_paragraph()
                 p.text = line
                 p.level = 0
-                p.font.size = Pt(18)
+                # ✅ 修改点 2：字体大小统一设为 24
+                p.font.size = Pt(24)
+                p.font.name = '微软雅黑'
+
+    # --- 3. ✅ 修改点 3：新增致谢页 ---
+    end_slide_layout = prs.slide_layouts[6]  # 使用空白布局
+    end_slide = prs.slides.add_slide(end_slide_layout)
+
+    # 在页面中心添加文本框
+    tx_box = end_slide.shapes.add_textbox(Inches(3), Inches(3.2), Inches(4), Inches(1))
+    tf_end = tx_box.text_frame
+    tf_end.text = "感谢您的观看"
+
+    # 设置致谢语格式
+    p_end = tf_end.paragraphs[0]
+    p_end.alignment = PP_ALIGN.CENTER
+    p_end.font.size = Pt(44)
+    p_end.font.bold = True
+    p_end.font.name = '微软雅黑'
 
     ppt_out = io.BytesIO()
     prs.save(ppt_out)
@@ -481,10 +512,9 @@ with tabs[-1]:
         if st.session_state.role == 'admin':
             with bc2:
                 if st.button("生成 PPT 汇总预览", use_container_width=True):
-                    # 调用函数生成流文件
+                    # ✅ 确保传入 excel_prep_df，因为它已经包含了 manager_name 列
                     ppt_bin = create_ppt_report(excel_prep_df, start_d, end_d)
 
-                    # 弹出下载链接
                     st.download_button(
                         label="点击下载 PPT 文件",
                         data=ppt_bin,
