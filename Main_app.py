@@ -146,61 +146,82 @@ def generate_custom_excel(df):
 # ✅ 完全替换此函数
 def create_ppt_report(df, start_date, end_date):
     """
-    生成专业 PPT：含 Logo、24号字、排序对齐及致谢页
+    生成 PPT：完全复刻 Excel 排序逻辑，24号字，含 Logo 和致谢页
     """
     prs = Presentation()
 
-    # --- 1. 标题页 (Slide 0) ---
+    # --- 1. 创建标题页 ---
     slide_layout_title = prs.slide_layouts[0]
     slide = prs.slides.add_slide(slide_layout_title)
 
-    # ✅ 加入公司 Logo (放在标题上方，居中且尺寸适中)
+    # 插入 Logo (保持较小尺寸并居中)
     try:
-        # 居中放置 Logo，1.5英寸宽，确保不遮挡标题
         slide.shapes.add_picture("TSM_Logo.png", left=Inches(4.25), top=Inches(0.5), width=Inches(1.5))
     except:
-        pass  # 如果 Logo 文件缺失，程序依然能跑
+        pass
 
     slide.shapes.title.text = "Trust Ship 船舶周报汇总"
-    slide.placeholders[1].text = f"周期: {start_date} ~ {end_date}\n生成日期: {datetime.now().strftime('%Y-%m-%d')}"
+    slide.placeholders[1].text = f"汇报周期: {start_date} ~ {end_date}\n生成日期: {datetime.now().strftime('%Y-%m-%d')}"
 
-    # --- 2. 详情页 (Slide 1+) ---
-    # ✅ 修改点 1：按照负责人和船名顺序生成，sort=False 保持 Excel 中的现有排序
-    for (manager, ship), group in df.groupby(['manager_name', 'ship_name'], sort=False):
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        # 标题显示格式：船名 (负责人)
-        slide.shapes.title.text = f"船舶状态: {ship} ({manager})"
-        tf = slide.placeholders[1].text_frame
+    # --- 2. ✅ 核心修正：同步 Excel 的预处理逻辑 ---
+    # 定义清洗与编号内部函数
+    def clean_and_reformat_ppt(series):
+        all_lines = []
+        for content in series:
+            if content:
+                lines = str(content).split('\n')
+                for line in lines:
+                    clean_line = re.sub(r'^\d+[\.、\s]*', '', line.strip())
+                    if clean_line: all_lines.append(clean_line)
+        if not all_lines: return ""
+        return "\n".join([f"{i + 1}. {text}" for i, text in enumerate(all_lines)])
+
+    # 严格按照 Excel 的方式进行聚合与排序
+    # 1. 按负责人和船名分组并合并内容
+    df_ppt = df.groupby(['manager_name', 'ship_name'], sort=False)['this_week_issue'].apply(
+        clean_and_reformat_ppt).reset_index()
+    # 2. 核心排序：先按负责人，再按船名，确保与 Excel 顺序百分百同步
+    df_ppt = df_ppt.sort_values(by=['manager_name', 'ship_name'])
+
+    # --- 3. 遍历处理后的数据生成详情页 ---
+    for _, row in df_ppt.iterrows():
+        manager = row['manager_name']
+        ship = row['ship_name']
+        issue_content = row['this_week_issue']
+
+        slide_layout_content = prs.slide_layouts[1]
+        slide = prs.slides.add_slide(slide_layout_content)
+
+        # 标题：船名 (负责人)
+        slide.shapes.title.text = f": {ship} ({manager})"
+
+        body_shape = slide.placeholders[1]
+        tf = body_shape.text_frame
         tf.word_wrap = True
 
-        for _, row in group.iterrows():
-            content = str(row['this_week_issue'])
-            # 清洗编号逻辑
-            lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in content.split('\n') if l.strip()]
-            for line in lines:
+        # 将合并后的内容拆分为行，逐行添加为项目符号
+        if issue_content:
+            for line in issue_content.split('\n'):
                 p = tf.add_paragraph()
                 p.text = line
                 p.level = 0
-                # ✅ 修改点 2：字体大小统一设为 24
-                p.font.size = Pt(24)
+                p.font.size = Pt(24)  # 字体大小设为 24
                 p.font.name = '微软雅黑'
 
-    # --- 3. ✅ 修改点 3：新增致谢页 ---
-    end_slide_layout = prs.slide_layouts[6]  # 使用空白布局
-    end_slide = prs.slides.add_slide(end_slide_layout)
-
-    # 在页面中心添加文本框
-    tx_box = end_slide.shapes.add_textbox(Inches(3), Inches(3.2), Inches(4), Inches(1))
+    # --- 4. 致谢页 ---
+    slide_layout_blank = prs.slide_layouts[6]
+    end_slide = prs.slides.add_slide(slide_layout_blank)
+    tx_box = end_slide.shapes.add_textbox(Inches(3), Inches(3.5), Inches(4), Inches(2))
     tf_end = tx_box.text_frame
     tf_end.text = "感谢您的观看"
 
-    # 设置致谢语格式
     p_end = tf_end.paragraphs[0]
     p_end.alignment = PP_ALIGN.CENTER
     p_end.font.size = Pt(44)
     p_end.font.bold = True
     p_end.font.name = '微软雅黑'
 
+    # --- 5. 保存 ---
     ppt_out = io.BytesIO()
     prs.save(ppt_out)
     ppt_out.seek(0)
