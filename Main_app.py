@@ -9,6 +9,9 @@ from sqlalchemy import text
 import io
 import openpyxl
 from openpyxl.styles import Alignment, Font, Border, Side  # <--- 必须有这一行
+from pptx import Presentation
+from pptx.util import Inches, Pt
+# 如果您还没安装，请在服务器终端运行: pip install python-pptx
 
 # --- 1. 基础配置与品牌样式 ---
 st.set_page_config(page_title="Trust Ship 船舶管理系统", layout="wide")
@@ -137,23 +140,40 @@ def generate_custom_excel(df):
     return output.getvalue()
 
 
+# ✅ 在 generate_custom_excel 下方添加此函数
 def create_ppt_report(df, start_date, end_date):
-    """Admin 专用的 PPT 汇总生成"""
+    """
+    将船舶数据转换为周报 PPT 幻灯片
+    """
     prs = Presentation()
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
+
+    # 1. 标题页
+    title_slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(title_slide_layout)
     slide.shapes.title.text = "Trust Ship 船舶周报汇总"
     slide.placeholders[1].text = f"周期: {start_date} ~ {end_date}"
+
+    # 2. 遍历船舶生成详情页
     for ship_name, group in df.groupby('ship_name'):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = f"船舶: {ship_name}"
+        slide.shapes.title.text = f"船舶状态: {ship_name}"
         tf = slide.placeholders[1].text_frame
+        tf.word_wrap = True
+
         for _, row in group.iterrows():
-            p = tf.add_paragraph()
-            p.text = f"• {row['report_date']}: {row['this_week_issue']}"
-    ppt_output = io.BytesIO()
-    prs.save(ppt_output)
-    ppt_output.seek(0)
-    return ppt_output
+            content = str(row['this_week_issue'])
+            # 清洗编号逻辑
+            lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in content.split('\n') if l.strip()]
+            for line in lines:
+                p = tf.add_paragraph()
+                p.text = line
+                p.level = 0
+                p.font.size = Pt(18)
+
+    ppt_out = io.BytesIO()
+    prs.save(ppt_out)
+    ppt_out.seek(0)
+    return ppt_out
 
 
 # --- 3. 登录界面 (Logo 仅在此显示且缩小) ---
@@ -460,9 +480,18 @@ with tabs[-1]:
 
         if st.session_state.role == 'admin':
             with bc2:
-                if st.button("📽️ 生成 PPT 汇总", use_container_width=True):
+                if st.button("生成 PPT 汇总预览", use_container_width=True):
+                    # 调用函数生成流文件
                     ppt_bin = create_ppt_report(excel_prep_df, start_d, end_d)
-                    st.download_button("点击下载 PPT", ppt_bin, f"Summary_{start_d}.pptx", use_container_width=True)
+
+                    # 弹出下载链接
+                    st.download_button(
+                        label="点击下载 PPT 文件",
+                        data=ppt_bin,
+                        file_name=f"Ship_Meeting_{start_d}.pptx",
+                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                        use_container_width=True
+                    )
     else:
         st.info("该日期范围内暂无您可以查看的数据。")
 
