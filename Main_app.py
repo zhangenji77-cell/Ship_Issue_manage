@@ -145,6 +145,24 @@ def generate_custom_excel(df):
 # ✅ 在 generate_custom_excel 下方添加此函数
 # ✅ 完全替换此函数
 def create_ppt_report(df, start_date, end_date):
+    # --- 1. 创建标题页 ---
+    prs = Presentation()
+    slide_layout_title = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(slide_layout_title)
+
+    # 获取标题和副标题对象
+    title = slide.shapes.title
+    subtitle = slide.placeholders[1]
+
+    # ✅ 调整标题位置：数值越大越靠下
+    # 默认通常在 1.5 到 2.5 左右，您可以尝试设为 3.0 或更大
+    title.top = Inches(3.0)
+    title.text = "Trust Ship 船舶周报汇总"
+
+    # ✅ 调整副标题位置：为了防止重叠，通常副标题也要跟着下移
+    # 确保 subtitle.top 大于 title.top
+    subtitle.top = Inches(4.5)
+    subtitle.text = f"汇报周期: {start_date} ~ {end_date}\n生成日期: {datetime.now().strftime('%Y-%m-%d')}"
     """
     生成 PPT：完全复刻 Excel 排序逻辑，24号字，含 Logo 和致谢页
     """
@@ -156,12 +174,11 @@ def create_ppt_report(df, start_date, end_date):
 
     # 插入 Logo (保持较小尺寸并居中)
     try:
-        slide.shapes.add_picture("TSM_Logo.png", left=Inches(4.25), top=Inches(0.5), width=Inches(1.5))
+        slide.shapes.add_picture("TSM_Logo.png", left=Inches(4.25), top=Inches(1.2), width=Inches(1.8))
     except:
         pass
 
     slide.shapes.title.text = "Trust Ship 船舶周报汇总"
-    slide.placeholders[1].text = f"汇报周期: {start_date} ~ {end_date}\n生成日期: {datetime.now().strftime('%Y-%m-%d')}"
 
     # --- 2. ✅ 核心修正：同步 Excel 的预处理逻辑 ---
     # 定义清洗与编号内部函数
@@ -193,7 +210,7 @@ def create_ppt_report(df, start_date, end_date):
         slide = prs.slides.add_slide(slide_layout_content)
 
         # 标题：船名 (负责人)
-        slide.shapes.title.text = f": {ship} ({manager})"
+        slide.shapes.title.text = f" {ship} ({manager})"
 
         body_shape = slide.placeholders[1]
         tf = body_shape.text_frame
