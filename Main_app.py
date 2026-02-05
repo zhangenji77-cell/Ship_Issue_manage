@@ -156,7 +156,7 @@ def create_ppt_report(df, start_date, end_date):
 
     # ✅ 调整标题位置：数值越大越靠下
     # 默认通常在 1.5 到 2.5 左右，您可以尝试设为 3.0 或更大
-    title.top = Inches(3.0)
+    title.top = Inches(3.5)
     title.text = "Trust Ship 船舶周报汇总"
 
     # ✅ 调整副标题位置：为了防止重叠，通常副标题也要跟着下移
