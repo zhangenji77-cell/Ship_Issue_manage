@@ -16,7 +16,7 @@ from pptx.enum.text import PP_ALIGN  # ✅ 新增：用于致谢页文字居中�
 # 如果您还没安装，请在服务器终端运行: pip install python-pptx
 
 # --- 1. 基础配置与品牌样式 ---
-st.set_page_config(page_title="Trust Ship 船舶管理系统", layout="wide")
+st.set_page_config(page_title="TSM Summary of Weekly Ship Reports", layout="wide")
 
 # 注入 CSS：美化按钮并实现导入按钮的灰色样式
 st.markdown("""
@@ -157,12 +157,12 @@ def create_ppt_report(df, start_date, end_date):
     # ✅ 调整标题位置：数值越大越靠下
     # 默认通常在 1.5 到 2.5 左右，您可以尝试设为 3.0 或更大
     title.top = Inches(3.5)
-    title.text = "Trust Ship 船舶周报汇总"
+    title.text = "TSM Summary of Weekly Ship Reports"
 
     # ✅ 调整副标题位置：为了防止重叠，通常副标题也要跟着下移
     # 确保 subtitle.top 大于 title.top
     current_date = datetime.now().strftime('%Y-%m-%d')
-    subtitle.text = f"生成日期: {current_date}"
+    subtitle.text = f"Creation Date: {current_date}"
     subtitle.top = Inches(4.5)
     """
     生成 PPT：完全复刻 Excel 排序逻辑，24号字，含 Logo 和致谢页
@@ -179,7 +179,7 @@ def create_ppt_report(df, start_date, end_date):
     except:
         pass
 
-    slide.shapes.title.text = "Trust Ship 船舶周报汇总"
+    slide.shapes.title.text = "TSM Summary of Weekly Ship Reports"
 
     # --- 2. ✅ 核心修正：同步 Excel 的预处理逻辑 ---
     # 定义清洗与编号内部函数
@@ -231,7 +231,7 @@ def create_ppt_report(df, start_date, end_date):
     end_slide = prs.slides.add_slide(slide_layout_blank)
     tx_box = end_slide.shapes.add_textbox(Inches(3), Inches(3.5), Inches(4), Inches(2))
     tf_end = tx_box.text_frame
-    tf_end.text = "感谢您的观看"
+    tf_end.text = "Thank you for watching."
 
     p_end = tf_end.paragraphs[0]
     p_end.alignment = PP_ALIGN.CENTER
@@ -256,9 +256,9 @@ def login_ui():
             pass
     st.markdown("<h2 style='text-align: center;'>Trust Ship 系统登录</h2>", unsafe_allow_html=True)
     with st.form("login_form"):
-        u_in = st.text_input("用户名")
-        p_in = st.text_input("密码", type="password")
-        if st.form_submit_button("立即进入系统", use_container_width=True):
+        u_in = st.text_input("User Name")
+        p_in = st.text_input("Password", type="password")
+        if st.form_submit_button("Log In", use_container_width=True):
             with get_engine().connect() as conn:
                 res = conn.execute(text("SELECT role FROM users WHERE username = :u AND password = :p"),
                                    {"u": u_in, "p": p_in}).fetchone()
@@ -269,7 +269,7 @@ def login_ui():
                     st.session_state.role = res[0]
                     st.rerun()
                 else:
-                    st.error("❌ 验证失败")
+                    st.error("Verification Failed")
 
 
 if not st.session_state.logged_in:
@@ -278,7 +278,7 @@ if not st.session_state.logged_in:
 
 # --- 4. 侧边栏 ---
 st.sidebar.title(f" {st.session_state.username}")
-if st.sidebar.button("安全退出"):
+if st.sidebar.button("Log Out Safely"):
     st.session_state.clear();
     st.rerun()
 
@@ -295,19 +295,19 @@ def get_ships_list(role, user):
 
 ships_df = get_ships_list(st.session_state.role, st.session_state.username)
 
-t_labels = ["填报与查询"]
+t_labels = ["Filling in and Querying"]
 if st.session_state.role == 'admin': t_labels.append("管理控制台")
-t_labels.append("报表中心")
+t_labels.append("Report Center")
 tabs = st.tabs(t_labels)
 
 # --- Tab 1: 业务填报 (核心：全时段修改 + 删除确认) ---
 # --- Tab 1: 业务填报 (核心：全时段修改 + 修复填写框显示) ---
 with tabs[0]:
     if ships_df.empty:
-        st.warning("⚠️ 暂无分配船舶。")
+        st.warning("No vessels have been assigned yet.")
     else:
         # 顶部选择与导航
-        selected_ship = st.selectbox("选择船舶", ships_df['ship_name'].tolist(), index=st.session_state.ship_index)
+        selected_ship = st.selectbox("Select a vessel", ships_df['ship_name'].tolist(), index=st.session_state.ship_index)
         ship_id = int(ships_df[ships_df['ship_name'] == selected_ship]['id'].iloc[0])
         st.divider()
 
@@ -317,24 +317,24 @@ with tabs[0]:
         # A. 历史记录回溯 (左侧)
         # A. 历史记录回溯 (左侧)
         with col_hist:
-            st.subheader("历史记录")
+            st.subheader("History Record")
 
             # ✅ 1. 二次确认逻辑移到最上方：如果有人点击了删除，这里会立刻弹出警告
             if st.session_state.confirm_del_id:
-                st.warning(f"⚠️ 正在准备删除记录 (ID: {st.session_state.confirm_del_id})")
+                st.warning(f"Prepare to delete the record. (ID: {st.session_state.confirm_del_id})")
                 d_col1, d_col2 = st.columns(2)
                 with d_col1:
-                    if st.button("确认删除", key="confirm_real_del"):
+                    if st.button("Confirm deletion", key="confirm_real_del"):
                         with get_engine().begin() as conn:
                             # 执行物理删除
                             conn.execute(text("DELETE FROM reports WHERE id = :id"),
                                          {"id": st.session_state.confirm_del_id})
                         st.session_state.confirm_del_id = None
-                        st.success("记录已永久删除")
+                        st.success("The record has been permanently deleted.")
                         time.sleep(1)
                         st.rerun()
                 with d_col2:
-                    if st.button("❌ 取消删除", key="cancel_real_del"):
+                    if st.button("Cancel Delete", key="cancel_real_del"):
                         st.session_state.confirm_del_id = None
                         st.rerun()
                 st.divider()
@@ -349,10 +349,10 @@ with tabs[0]:
                 for idx, row in h_df.iterrows():
                     # ✅ 增加 expanded=True 的判断：如果正在编辑该行，保持展开
                     is_editing = st.session_state.editing_id == row['id']
-                    with st.expander(f" {row['report_date']} 内容详情", expanded=is_editing):
+                    with st.expander(f" {row['report_date']} Content Details", expanded=is_editing):
                         if is_editing:
-                            new_val = st.text_area("修改内容:", value=row['this_week_issue'], key=f"ed_{row['id']}")
-                            if st.button("保存更新", key=f"save_{row['id']}"):
+                            new_val = st.text_area("Modifications:", value=row['this_week_issue'], key=f"ed_{row['id']}")
+                            if st.button("Save Updates", key=f"save_{row['id']}"):
                                 with get_engine().begin() as conn:
                                     conn.execute(text("UPDATE reports SET this_week_issue = :t WHERE id = :id"),
                                                  {"t": new_val, "id": row['id']})
@@ -367,72 +367,85 @@ with tabs[0]:
 
                             cb1, cb2 = st.columns(2)
                             with cb1:
-                                if st.button("修改", key=f"eb_{row['id']}"):
+                                if st.button("Modify", key=f"eb_{row['id']}"):
                                     st.session_state.editing_id = row['id']
                                     st.rerun()
                             with cb2:
                                 # ✅ 点击删除后，设置 ID 并触发页面刷新
-                                if st.button("删除", key=f"db_{row['id']}"):
+                                if st.button("Delete", key=f"db_{row['id']}"):
                                     st.session_state.confirm_del_id = row['id']
                                     st.rerun()
             else:
-                st.info("该船暂无历史。")
+                st.info("The vessel has no history.")
 
         # B. ✅ 填报板块 (右侧 - 确保这部分代码完整且缩进正确)
-        with col_input:
-            st.subheader(f"填报 - {selected_ship}")
-            # ✅ 更改位置 1：在此处定义回调函数
-            def handle_submit(sid, iss, rem):
-                if iss.strip():
-                    with get_engine().begin() as conn:
-                        conn.execute(text(
-                            "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
-                            {"sid": sid, "dt": datetime.now().date(), "iss": iss, "rem": rem})
+                # B. ✅ 填报板块 (右侧 - 修复提交旧数据和需要点两次的Bug)
+                with col_input:
+                    st.subheader(f"Fill in - {selected_ship}")
 
-                    # 在组件重新渲染前，安全地清空 Session State
-                    st.session_state[f"ta_{sid}"] = ""
-                    st.session_state.drafts[sid] = ""
-                    # 使用 toast 提供轻量级成功反馈
-                    st.toast(f"✅ {selected_ship} 数据提交成功！")
 
-            # 1. 一键导入逻辑
-            if st.button("一键导入最近填报", key=f"import_{ship_id}", use_container_width=True):
-                with get_engine().connect() as conn:
-                    last_rec = conn.execute(text(
-                        "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
-                        {"sid": ship_id}).fetchone()
-                    if last_rec:
-                        # 强制刷新文本框状态
-                        st.session_state[f"ta_{ship_id}"] = last_rec[0]
-                        st.success("已载入最近内容，您可以继续编辑。")
-                        time.sleep(0.5);
-                        st.rerun()
-                    else:
-                        st.warning("未找到历史记录。")
+                    # ✅ 更改位置 1：修改回调函数，不再接收 iss 和 rem 参数
+                    def handle_submit(sid):
+                        # 💡 核心修复：直接从 session_state 获取用户刚刚输入的最新鲜的数据
+                        latest_issue = st.session_state.get(f"ta_{sid}", "")
+                        latest_remark = st.session_state.get(f"rem_{sid}", "")
 
-            # 2. 文本输入框 (使用 key 绑定 session_state)
-            if f"ta_{ship_id}" not in st.session_state:
-                st.session_state[f"ta_{ship_id}"] = ""
+                        if latest_issue.strip():
+                            with get_engine().begin() as conn:
+                                conn.execute(text(
+                                    "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
+                                    {"sid": sid, "dt": datetime.now().date(), "iss": latest_issue,
+                                     "rem": latest_remark})
 
-            issue_v = st.text_area("本周问题 (每条一行):", height=350, key=f"ta_{ship_id}")
-            remark_v = st.text_input("备注 (选填)", key=f"rem_{ship_id}")
+                            # 在组件重新渲染前，安全地清空 Session State
+                            st.session_state[f"ta_{sid}"] = ""
+                            st.session_state[f"rem_{sid}"] = ""  # 顺便把备注也清空
+                            st.session_state.drafts[sid] = ""
+                            # 使用 toast 提供轻量级成功反馈
+                            st.toast(f" {selected_ship} Data submission successful!")
 
-            # ✅ 更改位置 2：使用 on_click 参数绑定回调函数
-            st.button(
-                "提交填报数据",
-                use_container_width=True,
-                on_click=handle_submit,
-                args=(ship_id, issue_v, remark_v)  # 传递当前船只ID、内容和备注
-            )
+
+                    # 1. 一键导入逻辑
+                    if st.button("Import information about the ship from last week.", key=f"import_{ship_id}", use_container_width=True):
+                        with get_engine().connect() as conn:
+                            last_rec = conn.execute(text(
+                                "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
+                                {"sid": ship_id}).fetchone()
+                            if last_rec:
+                                # 强制刷新文本框状态
+                                st.session_state[f"ta_{ship_id}"] = last_rec[0]
+                                st.success("The latest content has been loaded; you can continue editing.")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.warning("No history found")
+
+                    # 2. 文本输入框 (使用 key 绑定 session_state)
+                    if f"ta_{ship_id}" not in st.session_state:
+                        st.session_state[f"ta_{ship_id}"] = ""
+                    if f"rem_{ship_id}" not in st.session_state:
+                        st.session_state[f"rem_{ship_id}"] = ""
+
+                    # 注意这里：即使不把返回值赋给变量也没关系，因为 key 已经让它们自动写入系统大脑了
+                    st.text_area("This week's question (one line per question):", height=350, key=f"ta_{ship_id}")
+                    st.text_input("Remarks (optional)", key=f"rem_{ship_id}")
+
+                    # ✅ 更改位置 2：使用 on_click 触发函数，只传船只ID，不传文本内容
+                    st.button(
+                        "Submit the information",
+                        use_container_width=True,
+                        on_click=handle_submit,
+                        args=(ship_id,)  # 💡 这里只传 sid 即可
+                    )
 
         # C. 底部导航
         st.divider()
         n1, _, n3 = st.columns([1, 4, 1])
         with n1:
-            if st.button("⬅️ 上一艘"): st.session_state.ship_index = (st.session_state.ship_index - 1) % len(
+            if st.button("Previous"): st.session_state.ship_index = (st.session_state.ship_index - 1) % len(
                 ships_df); st.rerun()
         with n3:
-            if st.button("下一艘 ➡️"): st.session_state.ship_index = (st.session_state.ship_index + 1) % len(
+            if st.button("Next"): st.session_state.ship_index = (st.session_state.ship_index + 1) % len(
                 ships_df); st.rerun()
 # --- Tab 1: 管理员控制台 (新增部分) ---
 # --- Tab 1: 管理员控制台 (修正 PostgreSQL 别名引号) ---
@@ -466,14 +479,14 @@ if st.session_state.role == 'admin':
 # --- Tab 最后: 报表导出 ---
 # --- Tab 最后: 报表中心 (权限隔离导出) ---
 with tabs[-1]:
-    st.subheader("自动化报表导出与预览")
+    st.subheader("Automated information preview and export")
 
     # 1. 日期选择区域
     c1, c2 = st.columns(2)
     with c1:
-        start_d = st.date_input("起始日期", value=datetime.now() - timedelta(days=7), key="rep_start")
+        start_d = st.date_input("Start Date", value=datetime.now() - timedelta(days=7), key="rep_start")
     with c2:
-        end_d = st.date_input("截止日期", value=datetime.now(), key="rep_end")
+        end_d = st.date_input("Expiration Date", value=datetime.now(), key="rep_end")
 
     # 2. 获取数据 (包含权限隔离逻辑)
     with get_engine().connect() as conn:
@@ -498,9 +511,9 @@ with tabs[-1]:
     # --- ✅ 新增功能：搜索预览选项 ---
     st.write("---")
     # 使用 use_container_width 让按钮铺满，更易点击
-    if st.button("搜索并预览所选日期内的填报信息", use_container_width=True):
+    if st.button("Search and preview the information entered within the selected date", use_container_width=True):
         if not export_df.empty:
-            st.success(f"✅ 已找到 {len(export_df)} 条记录")
+            st.success(f"Found {len(export_df)} records")
 
             # 为了让预览更整洁，这里对预览数据也进行一次编号处理
             preview_df = export_df.copy()
@@ -511,7 +524,7 @@ with tabs[-1]:
                 return "\n".join([f"{i + 1}. {t}" for i, t in enumerate(lines)])
 
 
-            preview_df["填报内容"] = preview_df["填报内容"].apply(preview_clean)
+            preview_df["Fill in the content"] = preview_df["Fill in the content"].apply(preview_clean)
 
             # 在网页上展示交互式表格
             st.dataframe(
@@ -519,12 +532,12 @@ with tabs[-1]:
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    "填报内容": st.column_config.TextColumn("详细内容 (已自动编号)", width="large"),
-                    "日期": st.column_config.DateColumn("日期")
+                    "Fill in the content": st.column_config.TextColumn("Detailed information (automatically numbered)", width="large"),
+                    "Date": st.column_config.DateColumn("Date")
                 }
             )
         else:
-            st.warning("⚠️ 该日期范围内没有找到任何填报记录。")
+            st.warning("No reporting records were found within that date range")
 
     st.write("---")
 
@@ -541,7 +554,7 @@ with tabs[-1]:
         with bc1:
             excel_bin = generate_custom_excel(excel_prep_df)
             st.download_button(
-                label="下载 Excel 报表",
+                label="Download Excel version information",
                 data=excel_bin,
                 file_name=f"Trust_Ship_Report_{start_d}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -562,7 +575,7 @@ with tabs[-1]:
                         use_container_width=True
                     )
     else:
-        st.info("该日期范围内暂无您可以查看的数据。")
+        st.info("There is currently no data available for you to view within this date range")
 
 
 
