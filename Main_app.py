@@ -630,7 +630,7 @@ if st.session_state.role == 'admin':
 
         # ✅ 在原有管理员功能的下方，添加文件上传区
         st.write("---")
-        st.subheader("Automated Paylist Generator")
+        st.subheader("In Prot Automated Paylist Generator")
 
         # 允许上传 xlsx 文件
         uploaded_excel = st.file_uploader("Upload 'SUM-SAL' Excel file to generate payslips", type=["xlsx"])
