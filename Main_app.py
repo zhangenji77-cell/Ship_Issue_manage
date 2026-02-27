@@ -11,6 +11,10 @@ from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 import openpyxl
 from openpyxl.styles import Alignment, Font, Border, Side
+import zipfile
+from docx import Document
+from docx.shared import Pt, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # --- 1. Basic Configuration & CSS ---
 st.set_page_config(page_title="TSM Summary of Weekly Ship Reports", layout="wide")
@@ -184,6 +188,238 @@ def create_ppt_report(df, start_date, end_date):
     ppt_out.seek(0)
     return ppt_out
 
+
+# ---------------------------------------------------------
+# Paylist Generator Logic (工资单生成逻辑)
+# ---------------------------------------------------------
+def normalize_key(key):
+    if pd.isna(key): return ""
+    return re.sub(r'\s+', '', str(key)).lower()
+
+
+def clean_filename(name):
+    return re.sub(r'[\\/*?:"<>|]', "", str(name)).strip()
+
+
+def format_currency(val):
+    if pd.isna(val) or val == "": return ""
+    try:
+        s_val = str(val).replace(',', '').strip()
+        if not s_val: return ""
+        return "{:,.2f}".format(float(s_val))
+    except (ValueError, TypeError):
+        return str(val)
+
+
+def format_date_custom(val):
+    if pd.isna(val) or val == "": return ""
+    try:
+        if hasattr(val, 'strftime'): return val.strftime('%d/%m/%Y')
+        s_val = str(val).split()[0].strip()
+        if '-' in s_val:
+            parts = s_val.split('-')
+            if len(parts) == 3 and len(parts[0]) == 4:
+                return f"{parts[2]}/{parts[1]}/{parts[0]}"
+        return s_val
+    except:
+        return str(val)
+
+
+def set_cell_text(cell, text):
+    if text is None: text = ""
+    text = str(text)
+    if text.endswith(".0"): text = text[:-2]
+    cell.text = ""
+    p = cell.paragraphs[0]
+    run = p.add_run(text)
+    run.font.size = Pt(9)
+    run.font.name = 'Arial Narrow'
+    run.font.bold = True
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = 1.5
+
+
+def shrink_empty_lines(doc):
+    for p in doc.paragraphs:
+        if not p.text.strip():
+            p_fmt = p.paragraph_format
+            p_fmt.space_before = Pt(0)
+            p_fmt.space_after = Pt(0)
+            p_fmt.line_spacing = 1.0
+            if p.runs:
+                for r in p.runs: r.font.size = Pt(1)
+            else:
+                p.add_run(" ").font.size = Pt(1)
+
+
+def insert_spacer_before_payslip(doc):
+    for p in doc.paragraphs:
+        if "PAY SLIP" in p.text:
+            spacer = p.insert_paragraph_before(" ")
+            spacer.paragraph_format.space_after = Pt(0)
+            spacer.paragraph_format.line_spacing = 1.0
+            if spacer.runs:
+                spacer.runs[0].font.size = Pt(12)
+            else:
+                spacer.add_run(" ").font.size = Pt(12)
+            break
+
+
+def generate_paylist_zip(uploaded_excel):
+    """读取上传的 Excel，生成包含所有 Word 工资单的 ZIP 压缩包"""
+    # 1. 从内存中读取上传的文件
+    df_raw = pd.read_excel(uploaded_excel, sheet_name='SUM-SAL', header=None)
+
+    employees = []
+    current_vessel = "Unknown Vessel"
+    i = 0
+
+    # 2. 提取数据 (保留了您原本的清洗逻辑)
+    while i < len(df_raw):
+        row = df_raw.iloc[i].tolist()
+        first_cell = str(row[0]).strip() if pd.notna(row[0]) else ""
+
+        if i + 1 < len(df_raw):
+            next_row_first = str(df_raw.iloc[i + 1][0]).strip()
+            if next_row_first == 'S/N':
+                if "Vessel Name:" in first_cell:
+                    current_vessel = row[1]
+                elif first_cell and first_cell.lower() != 'nan':
+                    current_vessel = first_cell
+                raw_headers = df_raw.iloc[i + 1].tolist()
+                headers_map = {normalize_key(h): idx for idx, h in enumerate(raw_headers) if pd.notna(h)}
+                i += 2
+                continue
+
+        if 's/n' not in locals().get('headers_map', {}) and 'name' not in locals().get('headers_map', {}):
+            i += 1;
+            continue
+
+        if first_cell.isdigit():
+            emp = {'Vessel Name': current_vessel}
+
+            def get_val(col_keywords):
+                for key in headers_map:
+                    if normalize_key(col_keywords) in key:
+                        val = row[headers_map[key]]
+                        return val if pd.notna(val) else ""
+                return ""
+
+            emp['Name'] = get_val('Name')
+            emp['Rank'] = get_val('Rank')
+            emp['From'] = format_date_custom(get_val('From(Date)'))
+            emp['To'] = format_date_custom(get_val('To(Date)'))
+            emp['Day on Board'] = get_val('Day on Board')
+            emp['Basic Salary'] = format_currency(get_val('Basic Salary'))
+            emp['Fixed OT'] = format_currency(get_val('Fixed OT'))
+            emp['Leave Pay'] = format_currency(get_val('Leave Pay'))
+            emp['Allowance'] = format_currency(get_val('Allowance'))
+            emp['Net Salary'] = format_currency(get_val('Net Salary'))
+            emp['Reimbursement'] = format_currency(get_val('Reimbursement'))
+            emp['Subtotal'] = format_currency(get_val('Subtotal'))
+            emp['Deduction'] = format_currency(get_val('Deduction'))
+            emp['Release'] = format_currency(get_val('Release'))
+            emp['Retaining'] = format_currency(get_val('Retaining'))
+
+            rem_foreign = get_val('Remittance - Foreign')
+            rem_sg = get_val('Remittance - Singapore')
+            use_foreign = False
+            try:
+                if rem_foreign and float(str(rem_foreign).replace(',', '')) > 0: use_foreign = True
+            except:
+                pass
+
+            emp['Remittance'] = format_currency(rem_foreign if use_foreign else rem_sg)
+            emp['Remarks'] = get_val('Remarks')
+            employees.append(emp)
+        i += 1
+
+    # 3. 生成 Word 文档并压缩进 ZIP (纯内存操作，速度极快)
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for emp in employees:
+            # ⚠️ 必须确保 payslip模版.docx 文件存在于服务器目录下
+            doc = Document('payslip模版.docx')
+            insert_spacer_before_payslip(doc)
+
+            section = doc.sections[0]
+            section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
+            section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
+            tables = doc.tables
+
+            def fill_simple(table, label, value):
+                for row in table.rows:
+                    for c, cell in enumerate(row.cells):
+                        if label in cell.text and c + 1 < len(row.cells):
+                            set_cell_text(row.cells[c + 1], value)
+                            return
+
+            fill_simple(tables[0], "Employee's Name", emp['Name'])
+            fill_simple(tables[0], "Vessel Name", emp['Vessel Name'])
+            fill_simple(tables[1], "Rank", emp['Rank'])
+            fill_simple(tables[1], "FROM", emp['From'])
+            fill_simple(tables[1], "TO", emp['To'])
+            fill_simple(tables[1], "Day on Board", emp['Day on Board'])
+
+            t2 = tables[2]
+            header_row_idx, col_earn, col_deduct = -1, -1, -1
+            for r_idx in range(min(5, len(t2.rows))):
+                amount_indices = [c_idx for c_idx, cell in enumerate(t2.rows[r_idx].cells) if 'Amount' in cell.text]
+                if len(amount_indices) >= 2:
+                    header_row_idx, col_earn, col_deduct = r_idx, amount_indices[0], amount_indices[-1]
+                    break
+
+            if col_earn != -1 and col_deduct != -1:
+                def fill_left(label, val):
+                    for r in range(header_row_idx + 1, len(t2.rows)):
+                        if normalize_key(label) in normalize_key(
+                                "".join([c.text for c in t2.rows[r].cells[:col_earn]])):
+                            set_cell_text(t2.rows[r].cells[col_earn], val)
+                            break
+
+                def fill_right(label, val):
+                    for r in range(header_row_idx + 1, len(t2.rows)):
+                        if normalize_key(label) in normalize_key("".join([c.text for c in t2.rows[r].cells])):
+                            set_cell_text(t2.rows[r].cells[col_deduct], val)
+                            break
+
+                fill_left('Basic Salary', emp['Basic Salary'])
+                fill_left('Fixed OT', emp['Fixed OT'])
+                fill_left('Leave Pay', emp['Leave Pay'])
+                fill_left('Allowance', emp['Allowance'])
+                fill_left('Total Earnings', emp['Net Salary'])
+                fill_left('Reimbursement', emp['Reimbursement'])
+                fill_left('Net Amount', emp['Subtotal'])
+                fill_right('Total Deductions', emp['Deduction'])
+                fill_right('Release', emp['Release'])
+                fill_right('Retaining', emp['Retaining'])
+                fill_right('Remittance', emp['Remittance'])
+
+            remarks_content = str(emp['Remarks']).strip()
+            if remarks_content and remarks_content.lower() != 'nan' and remarks_content != '0':
+                for p in doc.paragraphs:
+                    if "Remarks:" in p.text:
+                        run = p.add_run(" " + remarks_content)
+                        run.font.size, run.font.name, run.font.bold = Pt(9), 'Arial Narrow', False
+                        p.paragraph_format.line_spacing = 1.0
+                        break
+
+            shrink_empty_lines(doc)
+
+            # 将单个文档保存到内存
+            doc_buffer = io.BytesIO()
+            doc.save(doc_buffer)
+            doc_buffer.seek(0)
+
+            # 写入 ZIP 文件中（自动按船名建立文件夹）
+            safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
+            safe_emp = clean_filename(emp['Name'])
+            zip_file.writestr(f"{safe_vessel}/{safe_emp}.docx", doc_buffer.getvalue())
+
+    zip_buffer.seek(0)
+    return zip_buffer
 
 # --- 3. Login UI ---
 def login_ui():
@@ -363,6 +599,8 @@ with tabs[0]:
                 st.session_state.ship_index = (st.session_state.ship_index + 1) % len(ships_df)
                 st.rerun()
 
+
+
 # --- Tab 2: Admin Console ---
 if st.session_state.role == 'admin':
     with tabs[1]:
@@ -388,6 +626,34 @@ if st.session_state.role == 'admin':
         else:
             st.info("No global report data available.")
 
+        # ... (这里是您原有的全局表格和删除代码) ...
+
+        # ✅ 在原有管理员功能的下方，添加文件上传区
+        st.write("---")
+        st.subheader("Automated Paylist Generator")
+
+        # 允许上传 xlsx 文件
+        uploaded_excel = st.file_uploader("Upload 'SUM-SAL' Excel file to generate payslips", type=["xlsx"])
+
+        if uploaded_excel is not None:
+            if st.button("Generate Paylists (ZIP)", use_container_width=True):
+                # 加上转圈圈的加载动画，因为处理几十个 Word 可能需要几秒钟
+                with st.spinner("Processing documents... Please wait."):
+                    try:
+                        # 调用刚刚写的打包函数
+                        zip_data = generate_paylist_zip(uploaded_excel)
+                        st.success("Successfully generated payslips!")
+
+                        # 弹出下载 .zip 文件的按钮
+                        st.download_button(
+                            label="Download All Payslips (.zip)",
+                            data=zip_data,
+                            file_name=f"Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
+                            mime="application/zip",
+                            use_container_width=True
+                        )
+                    except Exception as e:
+                        st.error(f"Error generating paylists: {e}")
 # --- Tab 3: Report Center ---
 with tabs[-1]:
     st.subheader("Automated Information Preview & Export")
