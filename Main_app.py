@@ -803,56 +803,56 @@ if st.session_state.role == 'admin':
         else:
             st.info("No global report data available.")
 
-            # ✅ 在原有管理员功能的下方，添加文件上传区
-            st.write("---")
-            st.subheader("In Port Automated Paylist Generator")
+        # ✅ 在原有管理员功能的下方，添加文件上传区
+        st.write("---")
+        st.subheader("In Port Automated Paylist Generator")
 
-            # 允许上传 xlsx 文件
-            uploaded_excel = st.file_uploader("Upload 'SUM-SAL' Excel file to generate payslips", type=["xlsx"])
+        # 允许上传 xlsx 文件
+        uploaded_excel = st.file_uploader("Upload 'SUM-SAL' Excel file to generate payslips", type=["xlsx"])
 
-            if uploaded_excel is not None:
-                # 使用两列布局，把两个按钮并排放在一起
-                btn_col1, btn_col2 = st.columns(2)
+        if uploaded_excel is not None:
+            # 使用两列布局，把两个按钮并排放在一起
+            btn_col1, btn_col2 = st.columns(2)
 
-                # 左侧按钮：原有的基础版 (仅 Word)
-                with btn_col1:
-                    if st.button("Generate Basic Paylists (Word Only)", use_container_width=True):
-                        with st.spinner("Processing basic documents... Please wait."):
-                            try:
+            # 左侧按钮：原有的基础版 (仅 Word)
+            with btn_col1:
+                 if st.button("Generate Basic Paylists (Word Only)", use_container_width=True):
+                     with st.spinner("Processing basic documents... Please wait."):
+                        try:
                                 # 每次调用前将文件指针归零
-                                uploaded_excel.seek(0)
-                                zip_data = generate_paylist_zip(uploaded_excel)
-                                st.success("Successfully generated basic payslips!")
+                            uploaded_excel.seek(0)
+                            zip_data = generate_paylist_zip(uploaded_excel)
+                            st.success("Successfully generated basic payslips!")
 
-                                st.download_button(
-                                    label="Download Basic Payslips (.zip)",
-                                    data=zip_data,
-                                    file_name=f"Basic_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
-                                    mime="application/zip",
-                                    use_container_width=True
-                                )
-                            except Exception as e:
-                                st.error(f"Error generating basic paylists: {e}")
+                            st.download_button(
+                                label="Download Basic Payslips (.zip)",
+                                data=zip_data,
+                                file_name=f"Basic_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.error(f"Error generating basic paylists: {e}")
 
-                # 右侧按钮：新增的进阶版 (Word + PDF)
-                with btn_col2:
-                    if st.button("Generate Advanced (Word & PDF)", use_container_width=True):
-                        with st.spinner("Processing dynamic calculations and converting to PDF... Please wait."):
-                            try:
-                                # 每次调用前将文件指针归零
-                                uploaded_excel.seek(0)
-                                zip_data_adv = generate_advanced_paylist_zip(uploaded_excel)
-                                st.success("Successfully generated Word and PDF payslips!")
+            # 右侧按钮：新增的进阶版 (Word + PDF)
+            with btn_col2:
+                if st.button("Generate Advanced (Word & PDF)", use_container_width=True):
+                    with st.spinner("Processing dynamic calculations and converting to PDF... Please wait."):
+                        try:
+                            # 每次调用前将文件指针归零
+                            uploaded_excel.seek(0)
+                            zip_data_adv = generate_advanced_paylist_zip(uploaded_excel)
+                            st.success("Successfully generated Word and PDF payslips!")
 
-                                st.download_button(
-                                    label="Download Advanced Payslips (.zip)",
-                                    data=zip_data_adv,
-                                    file_name=f"Advanced_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
-                                    mime="application/zip",
-                                    use_container_width=True
-                                )
-                            except Exception as e:
-                                st.error(f"Error generating advanced paylists: {e}")
+                            st.download_button(
+                                label="Download Advanced Payslips (.zip)",
+                                data=zip_data_adv,
+                                file_name=f"Advanced_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+                        except Exception as e:
+                            st.error(f"Error generating advanced paylists: {e}")
 
 # --- Tab 3: Report Center ---
 with tabs[-1]:
