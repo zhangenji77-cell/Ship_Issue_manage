@@ -430,14 +430,29 @@ def generate_paylist_zip(uploaded_excel):
 # =========================================================
 def generate_advanced_paylist_zip(uploaded_excel):
     """读取上传的 Excel，动态计算薪资，并在安全屋中生成 Word 和 PDF 双版本 ZIP 压缩包"""
-    # 每次调用时将指针重置到开头，防止两个按钮连续点击时读取不到文件
+    # 每次调用时将指针重置到开头
     uploaded_excel.seek(0)
 
-    df_raw = pd.read_excel(uploaded_excel, sheet_name='SUM-SAL', header=None)
+    # 1. 智能查找目标 Sheet
+    xl = pd.ExcelFile(uploaded_excel)
+    target_sheet = None
+    for sheet in xl.sheet_names:
+        # 忽略大小写、去掉空格进行匹配
+        if 'SUM-SAL' in sheet.upper().replace(' ', ''):
+            target_sheet = sheet
+            break
+
+    if not target_sheet:
+        raise ValueError(f"未找到包含 'SUM-SAL' 的工作表！当前文件包含的表有: {', '.join(xl.sheet_names)}")
+
+    # 2. 从内存中读取锁定的 Sheet
+    df_raw = pd.read_excel(xl, sheet_name=target_sheet, header=None)
+
     employees = []
     current_vessel = "Unknown Vessel"
     headers_map = {}
     i = 0
+    # ... (下方保留你原有的 while i < len(df_raw): 代码不变) ...
 
     while i < len(df_raw):
         row_vals = [str(x).strip() for x in df_raw.iloc[i].tolist()]
@@ -777,7 +792,6 @@ with tabs[0]:
                 st.rerun()
 
 
-
 # --- Tab 2: Admin Console ---
 if st.session_state.role == 'admin':
     with tabs[1]:
@@ -803,57 +817,77 @@ if st.session_state.role == 'admin':
         else:
             st.info("No global report data available.")
 
-        # ✅ 在原有管理员功能的下方，添加文件上传区
+        # =========================================================
+        # ✅ 工资单自动化生成区 (内港与外港彻底分离)
+        # =========================================================
         st.write("---")
-        st.subheader("In Port Automated Paylist Generator")
+        st.subheader("Automated Paylist Generator")
 
-        # 允许上传 xlsx 文件
-        uploaded_excel = st.file_uploader("Upload 'SUM-SAL' Excel file to generate payslips", type=["xlsx"])
+        # 使用单选按钮让用户明确选择操作模式
+        paylist_mode = st.radio(
+            "Select Paylist Type:",
+            ["In Port Paylist", "Out Port Paylist"],
+            horizontal=True
+        )
 
-        if uploaded_excel is not None:
-            # 使用两列布局，把两个按钮并排放在一起
-            btn_col1, btn_col2 = st.columns(2)
+        st.write("")  # 留一行空白让界面更透气
 
-            # 左侧按钮：原有的基础版 (仅 Word)
-            with btn_col1:
-                 if st.button("Generate Basic Paylists (Word Only)", use_container_width=True):
-                     with st.spinner("Processing basic documents... Please wait."):
+        # ---------------------------------------------------------
+        # 模式 A: 内港 (In Port) - 仅生成 Word
+        # ---------------------------------------------------------
+        if paylist_mode == "In Port Paylist":
+            st.info("In Port Mode: Uses template 'payslip模版.docx'. Generates Word documents only.")
+
+            # 注意：加入了 key 参数，防止上传框冲突
+            uploaded_in_port = st.file_uploader("Upload 'SUM-SAL' Excel file (In Port)", type=["xlsx"], key="upload_in")
+
+            if uploaded_in_port is not None:
+                if st.button("Generate In Port Paylists (Word ZIP)", use_container_width=True):
+                    with st.spinner("Processing In Port documents... Please wait."):
                         try:
-                                # 每次调用前将文件指针归零
-                            uploaded_excel.seek(0)
-                            zip_data = generate_paylist_zip(uploaded_excel)
-                            st.success("Successfully generated basic payslips!")
+                            uploaded_in_port.seek(0)
+                            # 调用基础版函数
+                            zip_data_in = generate_paylist_zip(uploaded_in_port)
+                            st.success("Successfully generated In Port payslips!")
 
                             st.download_button(
-                                label="Download Basic Payslips (.zip)",
-                                data=zip_data,
-                                file_name=f"Basic_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
+                                label="📥 Download In Port Payslips (.zip)",
+                                data=zip_data_in,
+                                file_name=f"In_Port_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
                                 mime="application/zip",
                                 use_container_width=True
                             )
                         except Exception as e:
-                            st.error(f"Error generating basic paylists: {e}")
+                            st.error(f"Error generating In Port paylists: {e}")
 
-            # 右侧按钮：新增的进阶版 (Word + PDF)
-            with btn_col2:
-                if st.button("Generate Advanced (Word & PDF)", use_container_width=True):
-                    with st.spinner("Processing dynamic calculations and converting to PDF... Please wait."):
+        # ---------------------------------------------------------
+        # 模式 B: 外港 (Out Port) - 动态计算 + 生成 Word 和 PDF
+        # ---------------------------------------------------------
+        else:
+            st.info(
+                "🌊 Out Port Mode: Uses template 'Out_port paylist 模版.docx'. Dynamically calculates salaries and generates BOTH Word and PDF documents.")
+
+            uploaded_out_port = st.file_uploader("Upload 'SUM-SAL' Excel file (Out Port)", type=["xlsx"],
+                                                 key="upload_out")
+
+            if uploaded_out_port is not None:
+                if st.button("Generate Out Port Paylists (Word & PDF ZIP)", use_container_width=True):
+                    with st.spinner("Processing calculations and converting PDFs via LibreOffice... Please wait."):
                         try:
-                            # 每次调用前将文件指针归零
-                            uploaded_excel.seek(0)
-                            zip_data_adv = generate_advanced_paylist_zip(uploaded_excel)
-                            st.success("Successfully generated Word and PDF payslips!")
+                            uploaded_out_port.seek(0)
+                            # 调用进阶版函数
+                            zip_data_out = generate_advanced_paylist_zip(uploaded_out_port)
+                            st.success("Successfully generated Out Port Word & PDF payslips!")
 
                             st.download_button(
-                                label="Download Advanced Payslips (.zip)",
-                                data=zip_data_adv,
-                                file_name=f"Advanced_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
+                                label="📥 Download Out Port Payslips (.zip)",
+                                data=zip_data_out,
+                                file_name=f"Out_Port_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
                                 mime="application/zip",
                                 use_container_width=True
                             )
                         except Exception as e:
-                            st.error(f"Error generating advanced paylists: {e}")
-
+                            st.error(f"Error generating Out Port paylists: {e}")
 # --- Tab 3: Report Center ---
 with tabs[-1]:
     st.subheader("Automated Information Preview & Export")
