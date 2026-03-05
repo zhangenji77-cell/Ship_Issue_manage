@@ -1,17 +1,20 @@
 import time
 import re
 import io
+import os
+import zipfile
+import tempfile
+import subprocess
 from datetime import datetime, timedelta
 import pandas as pd
 import sqlalchemy
 from sqlalchemy import text
 import streamlit as st
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
 import openpyxl
 from openpyxl.styles import Alignment, Font, Border, Side
-import zipfile
+from pptx import Presentation
+from pptx.util import Inches, Pt as Ppt_Pt
+from pptx.enum.text import PP_ALIGN
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -421,6 +424,180 @@ def generate_paylist_zip(uploaded_excel):
     zip_buffer.seek(0)
     return zip_buffer
 
+
+# =========================================================
+# 新增功能：进阶版 Paylist 生成逻辑 (动态计算 + Word + PDF 双版本)
+# =========================================================
+def generate_advanced_paylist_zip(uploaded_excel):
+    """读取上传的 Excel，动态计算薪资，并在安全屋中生成 Word 和 PDF 双版本 ZIP 压缩包"""
+    # 每次调用时将指针重置到开头，防止两个按钮连续点击时读取不到文件
+    uploaded_excel.seek(0)
+
+    df_raw = pd.read_excel(uploaded_excel, sheet_name='SUM-SAL', header=None)
+    employees = []
+    current_vessel = "Unknown Vessel"
+    headers_map = {}
+    i = 0
+
+    while i < len(df_raw):
+        row_vals = [str(x).strip() for x in df_raw.iloc[i].tolist()]
+        if 'S/N' in row_vals:
+            if i > 0:
+                prev_row = [str(x).strip() for x in df_raw.iloc[i - 1].tolist() if
+                            pd.notna(x) and str(x).strip() not in ['', 'nan']]
+                if prev_row:
+                    v_name = prev_row[0]
+                    current_vessel = v_name.split(":", 1)[1].strip() if "Vessel Name:" in v_name else v_name
+            headers_map = {normalize_key(h): idx for idx, h in enumerate(row_vals) if h not in ['nan', '']}
+            i += 1;
+            continue
+
+        first_cell = str(df_raw.iloc[i][0]).strip()
+        if first_cell.isdigit() and headers_map:
+            row_data = df_raw.iloc[i].tolist()
+
+            def get_val(col_keywords):
+                norm_key = normalize_key(col_keywords)
+                for key, idx in headers_map.items():
+                    if norm_key in key:
+                        return row_data[idx] if pd.notna(row_data[idx]) else ""
+                return ""
+
+            try:
+                m_str = str(get_val('MonthlySalary')).replace(',', '').strip()
+                m_val = float(m_str) if m_str else 0.0
+            except:
+                m_val = 0.0
+
+            basic_val = m_val * 0.58
+            ot_val = m_val * 0.37
+            fixed_ot = int(ot_val) + 1 if (round(ot_val, 4) - int(ot_val)) >= 0.5 else int(ot_val)
+            lp_val = m_val * 0.05
+            leave_pay = int(lp_val) + 1 if (round(lp_val, 4) - int(lp_val)) > 0.5 else int(lp_val)
+
+            emp = {
+                'Vessel Name': current_vessel, 'Name': get_val('Name'), 'Rank': get_val('Rank'),
+                'From': format_date_custom(get_val('FromDate') or get_val('From')),
+                'To': format_date_custom(get_val('ToDate') or get_val('To')),
+                'Day on Board': str(get_val('DayonBoard')),
+                'Basic Salary': format_currency(basic_val), 'Fixed OT': format_currency(fixed_ot),
+                'Leave Pay': format_currency(leave_pay), 'Total Earnings': format_currency(m_val),
+                'Reimbursement': format_currency(get_val('Reimbursement')),
+                'Net Amount': format_currency(get_val('SubTotal')),
+                'Total Deductions': format_currency(get_val('Deduction')),
+                'Release': format_currency(get_val('ReleaseofSalary')),
+                'Retaining': format_currency(get_val('Retaining')),
+                'Remittance': format_currency(get_val('RemittanceForeignBank') or get_val('Remittance')),
+                'Remarks': get_val('Remarks')
+            }
+            employees.append(emp)
+        i += 1
+
+    zip_buffer = io.BytesIO()
+
+    # 开启安全屋，利用 LibreOffice 生成 PDF
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for emp in employees:
+                # ⚠️ 确保服务器里上传了这个新模版文件
+                doc = Document('Out_port paylist 模版.docx')
+                insert_spacer_before_payslip(doc)
+
+                section = doc.sections[0]
+                section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
+                section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
+
+                def fill_simple(table, label, value):
+                    for row in table.rows:
+                        for c, cell in enumerate(row.cells):
+                            txt = cell.text.strip()
+                            if label in ["TO", "FROM", "Rank"] and txt not in [label, f"{label}:",
+                                                                               f"{label} :"]: continue
+                            if label in cell.text and c + 1 < len(row.cells):
+                                set_cell_text(row.cells[c + 1], value)
+                                return
+
+                for table in doc.tables[:2]:
+                    fill_simple(table, "Employee's Name", emp['Name'])
+                    fill_simple(table, "Vessel Name", emp['Vessel Name'])
+                    fill_simple(table, "Rank", emp['Rank'])
+                    fill_simple(table, "FROM", emp['From'])
+                    fill_simple(table, "TO", emp['To'])
+                    fill_simple(table, "Day on Board", emp['Day on Board'])
+
+                if len(doc.tables) >= 3:
+                    t_fin = doc.tables[2]
+                    col_earn, col_deduct = 4, 9
+                    for r in range(min(5, len(t_fin.rows))):
+                        amts = [idx for idx, c in enumerate(t_fin.rows[r].cells) if 'Amount' in c.text]
+                        if len(amts) >= 2:
+                            col_earn, col_deduct = amts[0], amts[-1]
+                            break
+
+                    for row in t_fin.rows:
+                        label = row.cells[0].text.strip()
+                        if col_earn < len(row.cells):
+                            if "Basic Salary" in label:
+                                set_cell_text(row.cells[col_earn], emp['Basic Salary'])
+                            elif "Fixed OT" in label:
+                                set_cell_text(row.cells[col_earn], emp['Fixed OT'])
+                            elif "Leave Pay" in label:
+                                set_cell_text(row.cells[col_earn], emp['Leave Pay'])
+                            elif "Total Earnings" in label:
+                                set_cell_text(row.cells[col_earn], emp['Total Earnings'])
+                            elif "Reimbursement" in label:
+                                set_cell_text(row.cells[col_earn], emp['Reimbursement'])
+                            elif "Net Amount" in label:
+                                set_cell_text(row.cells[col_earn], emp['Net Amount'])
+
+                        for idx, cell in enumerate(row.cells):
+                            c_txt = cell.text.strip()
+                            if col_deduct < len(row.cells):
+                                if "Total Deductions" in c_txt:
+                                    set_cell_text(row.cells[col_deduct], emp['Total Deductions'])
+                                elif "Release" in c_txt:
+                                    set_cell_text(row.cells[col_deduct], emp['Release'])
+                                elif "Retaining" in c_txt:
+                                    set_cell_text(row.cells[col_deduct], emp['Retaining'])
+                                elif "Remittance - Bank" in c_txt:
+                                    set_cell_text(row.cells[col_deduct], emp['Remittance'])
+
+                rem = str(emp['Remarks']).strip()
+                if rem and rem.lower() != 'nan' and rem != '0':
+                    for p in doc.paragraphs:
+                        if "Remarks:" in p.text:
+                            run = p.add_run(" " + rem)
+                            run.font.size, run.font.name, run.font.bold = Pt(9), 'Arial Narrow', False
+                            p.paragraph_format.line_spacing = 1.0
+                            break
+
+                shrink_empty_lines(doc)
+
+                safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
+                safe_emp = clean_filename(emp['Name'])
+
+                # 保存为 Word
+                temp_docx_path = os.path.join(temp_dir, f"{safe_emp}.docx")
+                doc.save(temp_docx_path)
+
+                # 触发 Linux LibreOffice 进行 PDF 转换
+                subprocess.run([
+                    'libreoffice', '--headless', '--convert-to', 'pdf',
+                    '--outdir', temp_dir, temp_docx_path
+                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+                # 将 PDF 和 Word 打包进 ZIP
+                temp_pdf_path = os.path.join(temp_dir, f"{safe_emp}.pdf")
+                if os.path.exists(temp_pdf_path):
+                    with open(temp_pdf_path, 'rb') as f:
+                        zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
+
+                with open(temp_docx_path, 'rb') as f:
+                    zip_file.writestr(f"Word_Version/{safe_vessel}/{safe_emp}.docx", f.read())
+
+    zip_buffer.seek(0)
+    return zip_buffer
+
 # --- 3. Login UI ---
 def login_ui():
     _, col_logo, _ = st.columns([2, 1, 2])
@@ -626,34 +803,57 @@ if st.session_state.role == 'admin':
         else:
             st.info("No global report data available.")
 
-        # ... (这里是您原有的全局表格和删除代码) ...
+            # ✅ 在原有管理员功能的下方，添加文件上传区
+            st.write("---")
+            st.subheader("In Port Automated Paylist Generator")
 
-        # ✅ 在原有管理员功能的下方，添加文件上传区
-        st.write("---")
-        st.subheader("In Port Automated Paylist Generator")
+            # 允许上传 xlsx 文件
+            uploaded_excel = st.file_uploader("Upload 'SUM-SAL' Excel file to generate payslips", type=["xlsx"])
 
-        # 允许上传 xlsx 文件
-        uploaded_excel = st.file_uploader("Upload 'SUM-SAL' Excel file to generate payslips", type=["xlsx"])
+            if uploaded_excel is not None:
+                # 使用两列布局，把两个按钮并排放在一起
+                btn_col1, btn_col2 = st.columns(2)
 
-        if uploaded_excel is not None:
-            if st.button("Generate Paylists (ZIP)", use_container_width=True):
-                # 加上转圈圈的加载动画，因为处理几十个 Word 可能需要几秒钟
-                with st.spinner("Processing documents... Please wait."):
-                    try:
-                        # 调用刚刚写的打包函数
-                        zip_data = generate_paylist_zip(uploaded_excel)
-                        st.success("Successfully generated payslips!")
+                # 左侧按钮：原有的基础版 (仅 Word)
+                with btn_col1:
+                    if st.button("Generate Basic Paylists (Word Only)", use_container_width=True):
+                        with st.spinner("Processing basic documents... Please wait."):
+                            try:
+                                # 每次调用前将文件指针归零
+                                uploaded_excel.seek(0)
+                                zip_data = generate_paylist_zip(uploaded_excel)
+                                st.success("Successfully generated basic payslips!")
 
-                        # 弹出下载 .zip 文件的按钮
-                        st.download_button(
-                            label="Download All Payslips (.zip)",
-                            data=zip_data,
-                            file_name=f"Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
-                            mime="application/zip",
-                            use_container_width=True
-                        )
-                    except Exception as e:
-                        st.error(f"Error generating paylists: {e}")
+                                st.download_button(
+                                    label="Download Basic Payslips (.zip)",
+                                    data=zip_data,
+                                    file_name=f"Basic_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
+                                    mime="application/zip",
+                                    use_container_width=True
+                                )
+                            except Exception as e:
+                                st.error(f"Error generating basic paylists: {e}")
+
+                # 右侧按钮：新增的进阶版 (Word + PDF)
+                with btn_col2:
+                    if st.button("Generate Advanced (Word & PDF)", use_container_width=True):
+                        with st.spinner("Processing dynamic calculations and converting to PDF... Please wait."):
+                            try:
+                                # 每次调用前将文件指针归零
+                                uploaded_excel.seek(0)
+                                zip_data_adv = generate_advanced_paylist_zip(uploaded_excel)
+                                st.success("Successfully generated Word and PDF payslips!")
+
+                                st.download_button(
+                                    label="Download Advanced Payslips (.zip)",
+                                    data=zip_data_adv,
+                                    file_name=f"Advanced_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
+                                    mime="application/zip",
+                                    use_container_width=True
+                                )
+                            except Exception as e:
+                                st.error(f"Error generating advanced paylists: {e}")
+
 # --- Tab 3: Report Center ---
 with tabs[-1]:
     st.subheader("Automated Information Preview & Export")
