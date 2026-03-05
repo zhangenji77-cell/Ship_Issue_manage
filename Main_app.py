@@ -18,6 +18,7 @@ from pptx.enum.text import PP_ALIGN
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_LINE_SPACING
 
 # --- 1. Basic Configuration & CSS ---
 st.set_page_config(page_title="TSM Summary of Weekly Ship Reports", layout="wide")
@@ -250,7 +251,9 @@ def shrink_empty_lines(doc):
             p_fmt = p.paragraph_format
             p_fmt.space_before = Pt(0)
             p_fmt.space_after = Pt(0)
-            p_fmt.line_spacing = 1.0
+            # 开启绝对行距模式，锁定为 1 磅
+            p_fmt.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+            p_fmt.line_spacing = Pt(1)
             if p.runs:
                 for r in p.runs: r.font.size = Pt(1)
             else:
@@ -836,7 +839,7 @@ if st.session_state.role == 'admin':
         # 模式 A: 内港 (In Port) - 仅生成 Word
         # ---------------------------------------------------------
         if paylist_mode == "In Port Paylist":
-            st.info("In Port Mode: Uses template 'payslip模版.docx'. Generates Word documents only.")
+            st.info("In Port Mode: Generates Word documents.")
 
             # 注意：加入了 key 参数，防止上传框冲突
             uploaded_in_port = st.file_uploader("Upload 'SUM-SAL' Excel file (In Port)", type=["xlsx"], key="upload_in")
@@ -865,7 +868,7 @@ if st.session_state.role == 'admin':
         # ---------------------------------------------------------
         else:
             st.info(
-                "🌊 Out Port Mode: Uses template 'Out_port paylist 模版.docx'. Dynamically calculates salaries and generates BOTH Word and PDF documents.")
+                "Out Port Mode: generates BOTH Word and PDF documents.")
 
             uploaded_out_port = st.file_uploader("Upload 'SUM-SAL' Excel file (Out Port)", type=["xlsx"],
                                                  key="upload_out")
@@ -880,7 +883,7 @@ if st.session_state.role == 'admin':
                             st.success("Successfully generated Out Port Word & PDF payslips!")
 
                             st.download_button(
-                                label="📥 Download Out Port Payslips (.zip)",
+                                label="Download Out Port Payslips (.zip)",
                                 data=zip_data_out,
                                 file_name=f"Out_Port_Paylists_{datetime.now().strftime('%Y%m%d')}.zip",
                                 mime="application/zip",
