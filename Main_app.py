@@ -594,19 +594,34 @@ def generate_advanced_paylist_zip(uploaded_excel):
                 safe_emp = clean_filename(emp['Name'])
 
                 # 保存为 Word
+                # 1. 首先，将排版正常的【纯 Word 版】原封不动地保存下来
                 temp_docx_path = os.path.join(temp_dir, f"{safe_emp}.docx")
                 doc.save(temp_docx_path)
 
-                # 触发 Linux LibreOffice 进行 PDF 转换
+                # 2. ⚡️ 核心魔法：专门为 PDF 版本单独增加向下的间距 ⚡️
+                # 扫描文档，找到 "PAY SLIP" 这几个字，强行给它上面加空白
+                for p in doc.paragraphs:
+                    if "PAY SLIP" in p.text:
+                        # 这里的 Pt(30) 就是专门为 PDF 增加的向下挤压距离！
+                        # 如果不够，改大(比如 Pt(40))；如果挤到了第二页，改小(比如 Pt(20))
+                        p.paragraph_format.space_before = Pt(20)
+                        break
+
+                # 3. 把“加了料”的文档保存为一个专门用来转 PDF 的临时过渡文件
+                temp_pdf_docx_path = os.path.join(temp_dir, f"{safe_emp}_for_pdf.docx")
+                doc.save(temp_pdf_docx_path)
+
+                # 4. 让 LibreOffice 去转换这个专门为 PDF 定制的过渡文件
                 subprocess.run([
                     'libreoffice', '--headless', '--convert-to', 'pdf',
-                    '--outdir', temp_dir, temp_docx_path
+                    '--outdir', temp_dir, temp_pdf_docx_path
                 ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                # 将 PDF 和 Word 打包进 ZIP
-                temp_pdf_path = os.path.join(temp_dir, f"{safe_emp}.pdf")
+                # 5. 将定制生成的 PDF 和最初那个正常的 Word 打包进 ZIP
+                temp_pdf_path = os.path.join(temp_dir, f"{safe_emp}_for_pdf.pdf")
                 if os.path.exists(temp_pdf_path):
                     with open(temp_pdf_path, 'rb') as f:
+                        # 写入压缩包时，把名字变回正常的，假装什么都没发生过
                         zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
 
                 with open(temp_docx_path, 'rb') as f:
