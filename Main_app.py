@@ -604,7 +604,7 @@ def generate_advanced_paylist_zip(uploaded_excel):
                     if "PAY SLIP" in p.text:
                         # 这里的 Pt(30) 就是专门为 PDF 增加的向下挤压距离！
                         # 如果不够，改大(比如 Pt(40))；如果挤到了第二页，改小(比如 Pt(20))
-                        p.paragraph_format.space_before = Pt(50)
+                        p.paragraph_format.space_before = Pt(10)
                         break
 
                 # 3. 把“加了料”的文档保存为一个专门用来转 PDF 的临时过渡文件
