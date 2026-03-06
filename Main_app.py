@@ -266,10 +266,11 @@ def insert_spacer_before_payslip(doc):
             spacer = p.insert_paragraph_before(" ")
             spacer.paragraph_format.space_after = Pt(0)
             spacer.paragraph_format.line_spacing = 1.0
+            # 💡 将字体大小从 Pt(12) 增大到 Pt(36)，利用这个隐藏的空行把标题往下挤
             if spacer.runs:
-                spacer.runs[0].font.size = Pt(12)
+                spacer.runs[0].font.size = Pt(36)
             else:
-                spacer.add_run(" ").font.size = Pt(12)
+                spacer.add_run(" ").font.size = Pt(36)
             break
 
 
@@ -351,7 +352,7 @@ def generate_paylist_zip(uploaded_excel):
             insert_spacer_before_payslip(doc)
 
             section = doc.sections[0]
-            section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
+            section.top_margin, section.bottom_margin = Cm(3.5), Cm(0.5)
             section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
             tables = doc.tables
 
@@ -522,7 +523,7 @@ def generate_advanced_paylist_zip(uploaded_excel):
                 insert_spacer_before_payslip(doc)
 
                 section = doc.sections[0]
-                section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
+                section.top_margin, section.bottom_margin = Cm(3.5), Cm(0.5)
                 section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
 
                 def fill_simple(table, label, value):
