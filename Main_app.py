@@ -595,19 +595,20 @@ def generate_advanced_paylist_zip(uploaded_excel):
 
                 # 保存为 Word
                 # 1. 首先，将排版正常的【纯 Word 版】原封不动地保存下来
+                # 1. 首先，将排版正常的【纯 Word 版】原封不动地保存下来
                 temp_docx_path = os.path.join(temp_dir, f"{safe_emp}.docx")
                 doc.save(temp_docx_path)
 
-                # 2. ⚡️ 核心魔法：专门为 PDF 版本单独增加向下的间距 ⚡️
-                # 扫描文档，找到 "PAY SLIP" 这几个字，强行给它上面加空白
-                for p in doc.paragraphs:
-                    if "PAY SLIP" in p.text:
-                        # 这里的 Pt(30) 就是专门为 PDF 增加的向下挤压距离！
-                        # 如果不够，改大(比如 Pt(40))；如果挤到了第二页，改小(比如 Pt(20))
-                        p.paragraph_format.space_before = Pt(10)
-                        break
+                # 2. ⚡️ 核心魔法：专门为 PDF 版本单独“提升天花板” ⚡️
+                # 我们不再去挤压标题，而是直接修改这个临时 PDF 文件的顶部边距
+                pdf_section = doc.sections[0]
 
-                # 3. 把“加了料”的文档保存为一个专门用来转 PDF 的临时过渡文件
+                # 💡 调节这里的数值：
+                # 如果你想让 PDF 整体再往上移，就把 Cm(1.5) 改小，比如 Cm(1.0) 或 Cm(0.5)
+                # 如果太靠上撞到了 Logo，就改大，比如 Cm(2.0)
+                pdf_section.top_margin = Cm(1.5)
+
+                # 3. 把修改了边距的文档保存为一个专门用来转 PDF 的临时过渡文件
                 temp_pdf_docx_path = os.path.join(temp_dir, f"{safe_emp}_for_pdf.docx")
                 doc.save(temp_pdf_docx_path)
 
@@ -621,7 +622,6 @@ def generate_advanced_paylist_zip(uploaded_excel):
                 temp_pdf_path = os.path.join(temp_dir, f"{safe_emp}_for_pdf.pdf")
                 if os.path.exists(temp_pdf_path):
                     with open(temp_pdf_path, 'rb') as f:
-                        # 写入压缩包时，把名字变回正常的，假装什么都没发生过
                         zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
 
                 with open(temp_docx_path, 'rb') as f:
