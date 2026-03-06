@@ -251,9 +251,7 @@ def shrink_empty_lines(doc):
             p_fmt = p.paragraph_format
             p_fmt.space_before = Pt(0)
             p_fmt.space_after = Pt(0)
-            # 开启绝对行距模式，锁定为 1 磅
-            p_fmt.line_spacing_rule = WD_LINE_SPACING.EXACTLY
-            p_fmt.line_spacing = Pt(1)
+            p_fmt.line_spacing = 1.0
             if p.runs:
                 for r in p.runs: r.font.size = Pt(1)
             else:
@@ -268,9 +266,9 @@ def insert_spacer_before_payslip(doc):
             spacer.paragraph_format.line_spacing = 1.0
             # 💡 将字体大小从 Pt(12) 增大到 Pt(36)，利用这个隐藏的空行把标题往下挤
             if spacer.runs:
-                spacer.runs[0].font.size = Pt(36)
+                spacer.runs[0].font.size = Pt(12)
             else:
-                spacer.add_run(" ").font.size = Pt(36)
+                spacer.add_run(" ").font.size = Pt(12)
             break
 
 
@@ -352,7 +350,7 @@ def generate_paylist_zip(uploaded_excel):
             insert_spacer_before_payslip(doc)
 
             section = doc.sections[0]
-            section.top_margin, section.bottom_margin = Cm(3.5), Cm(0.5)
+            section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
             section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
             tables = doc.tables
 
@@ -523,7 +521,7 @@ def generate_advanced_paylist_zip(uploaded_excel):
                 insert_spacer_before_payslip(doc)
 
                 section = doc.sections[0]
-                section.top_margin, section.bottom_margin = Cm(3.5), Cm(0.5)
+                section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
                 section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
 
                 def fill_simple(table, label, value):
