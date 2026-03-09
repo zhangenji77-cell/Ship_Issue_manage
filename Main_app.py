@@ -388,8 +388,12 @@ def generate_paylist_zip(uploaded_excel):
                 for row in table.rows:
                     for c, cell in enumerate(row.cells):
                         if label in cell.text and c + 1 < len(row.cells):
-                            # 💡 在这里加上 custom_spacing=1.5，让这些头部信息保持 1.5 倍行距
-                            set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
+                            # 💡 只有遇到这四个特定标签时，才使用 1.5 倍行距
+                            if label in ["Rank", "FROM", "TO", "Day on Board"]:
+                                set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
+                            else:
+                                # 其他所有表头内容（如 Employee's Name 等）都使用 1.0
+                                set_cell_text(row.cells[c + 1], value, custom_spacing=1.0)
                             return
             fill_simple(tables[0], "Employee's Name", emp['Name'])
             fill_simple(tables[0], "Vessel Name", emp['Vessel Name'])
@@ -561,8 +565,11 @@ def generate_advanced_paylist_zip(uploaded_excel):
                             if label in ["TO", "FROM", "Rank"] and txt not in [label, f"{label}:",
                                                                                f"{label} :"]: continue
                             if label in cell.text and c + 1 < len(row.cells):
-                                # 💡 同样在这里加上 custom_spacing=1.5
-                                set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
+                                # 💡 同样加上精准的条件判断
+                                if label in ["Rank", "FROM", "TO", "Day on Board"]:
+                                    set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
+                                else:
+                                    set_cell_text(row.cells[c + 1], value, custom_spacing=1.0)
                                 return
                 for table in doc.tables[:2]:
                     fill_simple(table, "Employee's Name", emp['Name'])
