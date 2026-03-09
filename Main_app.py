@@ -302,9 +302,9 @@ def insert_spacer_before_payslip(doc):
             spacer.paragraph_format.line_spacing = 1.0
             # 💡 将字体大小从 Pt(12) 增大到 Pt(36)，利用这个隐藏的空行把标题往下挤
             if spacer.runs:
-                spacer.runs[0].font.size = Pt(12)
+                spacer.runs[0].font.size = Pt(18)
             else:
-                spacer.add_run(" ").font.size = Pt(12)
+                spacer.add_run(" ").font.size = Pt(18)
             break
 
 
@@ -485,8 +485,10 @@ def generate_advanced_paylist_zip(uploaded_excel):
             break
 
     if not target_sheet:
-        raise ValueError(f"未找到包含 'SUM-SAL' 的工作表！当前文件包含的表有: {', '.join(xl.sheet_names)}")
-
+        # 如果连名字都不对，直接强行读取第一个 Sheet 兜底
+        df_raw = pd.read_excel(xl, sheet_name=0, header=None)
+    else:
+        df_raw = pd.read_excel(xl, sheet_name=target_sheet, header=None)
     # 2. 从内存中读取锁定的 Sheet
     df_raw = pd.read_excel(xl, sheet_name=target_sheet, header=None)
 
@@ -561,7 +563,7 @@ def generate_advanced_paylist_zip(uploaded_excel):
                 insert_spacer_before_payslip(doc)
 
                 section = doc.sections[0]
-                section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
+                section.top_margin, section.bottom_margin = Cm(2.2), Cm(0.2)
                 section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
 
                 def fill_simple(table, label, value):
