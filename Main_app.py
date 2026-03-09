@@ -920,7 +920,7 @@ if st.session_state.role == 'admin':
 
             if uploaded_in_port is not None:
                 if st.button("Generate In Port payslips (Word ZIP)", use_container_width=True):
-                    with st.spinner("Processing In Port documents... Please wait."):
+                    with st.spinner("Please wait"):
                         try:
                             uploaded_in_port.seek(0)
                             # 调用基础版函数
@@ -949,7 +949,7 @@ if st.session_state.role == 'admin':
 
             if uploaded_out_port is not None:
                 if st.button("Generate Out Port Payslips (Word & PDF ZIP)", use_container_width=True):
-                    with st.spinner("Processing calculations and converting PDFs via LibreOffice... Please wait."):
+                    with st.spinner("Please wait"):
                         try:
                             uploaded_out_port.seek(0)
                             # 调用进阶版函数
