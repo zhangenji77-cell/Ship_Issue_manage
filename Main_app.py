@@ -490,8 +490,6 @@ def generate_advanced_payslips_zip(uploaded_excel):
         df_raw = pd.read_excel(xl, sheet_name=0, header=None)
     else:
         df_raw = pd.read_excel(xl, sheet_name=target_sheet, header=None)
-    # 2. 从内存中读取锁定的 Sheet
-    df_raw = pd.read_excel(xl, sheet_name=target_sheet, header=None)
 
     employees = []
     current_vessel = "Unknown Vessel"
