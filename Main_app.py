@@ -260,19 +260,25 @@ def format_date_custom(val):
         return str(val)
 
 
-def set_cell_text(cell, text=1.0):
+def set_cell_text(cell, text, custom_spacing=1.0):
     if text is None: text = ""
     text = str(text)
     if text.endswith(".0"): text = text[:-2]
+
     cell.text = ""
     p = cell.paragraphs[0]
     run = p.add_run(text)
+
     run.font.size = Pt(9)
     run.font.name = 'Arial Narrow'
     run.font.bold = True
+
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
+
+    # 接收传进来的行距参数（默认为 1.0）
+    p.paragraph_format.line_spacing = custom_spacing
 
 
 def shrink_empty_lines(doc):
