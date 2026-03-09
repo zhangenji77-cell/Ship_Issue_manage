@@ -310,15 +310,27 @@ def insert_spacer_before_payslip(doc):
 
 
 def generate_payslip_zip(uploaded_excel):
-    """读取上传的 Excel，生成包含所有 Word 工资单的 ZIP 压缩包"""
-    # 1. 从内存中读取上传的文件
-    df_raw = pd.read_excel(uploaded_excel, sheet_name='SUM-SAL', header=None)
+    """读取上传的 Excel，生成包含内港 Word 和 PDF 工资单的双版本 ZIP 压缩包"""
+    uploaded_excel.seek(0)
+
+    # 1. 智能查找目标 Sheet (无视大小写和空格防报错)
+    xl = pd.ExcelFile(uploaded_excel)
+    target_sheet = None
+    for sheet in xl.sheet_names:
+        if 'SUM-SAL' in sheet.upper().replace(' ', ''):
+            target_sheet = sheet
+            break
+
+    if not target_sheet:
+        df_raw = pd.read_excel(xl, sheet_name=0, header=None)
+    else:
+        df_raw = pd.read_excel(xl, sheet_name=target_sheet, header=None)
 
     employees = []
     current_vessel = "Unknown Vessel"
     i = 0
 
-    # 2. 提取数据 (保留了您原本的清洗逻辑)
+    # 2. 提取数据 (保留内港专属的清洗逻辑)
     while i < len(df_raw):
         row = df_raw.iloc[i].tolist()
         first_cell = str(row[0]).strip() if pd.notna(row[0]) else ""
@@ -378,91 +390,121 @@ def generate_payslip_zip(uploaded_excel):
             employees.append(emp)
         i += 1
 
-    # 3. 生成 Word 文档并压缩进 ZIP (纯内存操作，速度极快)
+    # 3. 启动临时安全屋生成双版本文档 (引入批量 PDF 提速逻辑)
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for emp in employees:
-            # ⚠️ 必须确保 payslip模版.docx 文件存在于服务器目录下
-            doc = Document('payslip模版.docx')
-            insert_spacer_before_payslip(doc)
+    with tempfile.TemporaryDirectory() as temp_dir:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
 
-            section = doc.sections[0]
-            section.top_margin, section.bottom_margin = Cm(1.0), Cm(0.5)
-            section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
-            tables = doc.tables
+            # --- 阶段一：极速生成所有的 Word 过渡文件 ---
+            for emp in employees:
+                # ⚠️ 内港使用内港专属的模版
+                doc = Document('payslip模版.docx')
+                insert_spacer_before_payslip(doc)
 
-            def fill_simple(table, label, value):
-                for row in table.rows:
-                    for c, cell in enumerate(row.cells):
-                        if label in cell.text and c + 1 < len(row.cells):
-                            # 💡 只有遇到这四个特定标签时，才使用 1.5 倍行距
-                            if label in ["Rank", "FROM", "TO", "Day on Board"]:
-                                set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
-                            else:
-                                # 其他所有表头内容（如 Employee's Name 等）都使用 1.0
-                                set_cell_text(row.cells[c + 1], value, custom_spacing=1.0)
-                            return
-            fill_simple(tables[0], "Employee's Name", emp['Name'])
-            fill_simple(tables[0], "Vessel Name", emp['Vessel Name'])
-            fill_simple(tables[1], "Rank", emp['Rank'])
-            fill_simple(tables[1], "FROM", emp['From'])
-            fill_simple(tables[1], "TO", emp['To'])
-            fill_simple(tables[1], "Day on Board", emp['Day on Board'])
+                section = doc.sections[0]
+                section.top_margin, section.bottom_margin = Cm(2.2), Cm(0.2)
+                section.left_margin, section.right_margin = Cm(1.0), Cm(1.0)
+                tables = doc.tables
 
-            t2 = tables[2]
-            header_row_idx, col_earn, col_deduct = -1, -1, -1
-            for r_idx in range(min(5, len(t2.rows))):
-                amount_indices = [c_idx for c_idx, cell in enumerate(t2.rows[r_idx].cells) if 'Amount' in cell.text]
-                if len(amount_indices) >= 2:
-                    header_row_idx, col_earn, col_deduct = r_idx, amount_indices[0], amount_indices[-1]
-                    break
+                def fill_simple(table, label, value):
+                    for row in table.rows:
+                        for c, cell in enumerate(row.cells):
+                            if label in cell.text and c + 1 < len(row.cells):
+                                if label in ["Rank", "FROM", "TO", "Day on Board"]:
+                                    set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
+                                else:
+                                    set_cell_text(row.cells[c + 1], value, custom_spacing=1.0)
+                                return
 
-            if col_earn != -1 and col_deduct != -1:
-                def fill_left(label, val):
-                    for r in range(header_row_idx + 1, len(t2.rows)):
-                        if normalize_key(label) in normalize_key(
-                                "".join([c.text for c in t2.rows[r].cells[:col_earn]])):
-                            set_cell_text(t2.rows[r].cells[col_earn], val)
-                            break
+                fill_simple(tables[0], "Employee's Name", emp['Name'])
+                fill_simple(tables[0], "Vessel Name", emp['Vessel Name'])
+                fill_simple(tables[1], "Rank", emp['Rank'])
+                fill_simple(tables[1], "FROM", emp['From'])
+                fill_simple(tables[1], "TO", emp['To'])
+                fill_simple(tables[1], "Day on Board", emp['Day on Board'])
 
-                def fill_right(label, val):
-                    for r in range(header_row_idx + 1, len(t2.rows)):
-                        if normalize_key(label) in normalize_key("".join([c.text for c in t2.rows[r].cells])):
-                            set_cell_text(t2.rows[r].cells[col_deduct], val)
-                            break
-
-                fill_left('Basic Salary', emp['Basic Salary'])
-                fill_left('Fixed OT', emp['Fixed OT'])
-                fill_left('Leave Pay', emp['Leave Pay'])
-                fill_left('Allowance', emp['Allowance'])
-                fill_left('Total Earnings', emp['Net Salary'])
-                fill_left('Reimbursement', emp['Reimbursement'])
-                fill_left('Net Amount', emp['Subtotal'])
-                fill_right('Total Deductions', emp['Deduction'])
-                fill_right('Release', emp['Release'])
-                fill_right('Retaining', emp['Retaining'])
-                fill_right('Remittance', emp['Remittance'])
-
-            remarks_content = str(emp['Remarks']).strip()
-            if remarks_content and remarks_content.lower() != 'nan' and remarks_content != '0':
-                for p in doc.paragraphs:
-                    if "Remarks:" in p.text:
-                        run = p.add_run(" " + remarks_content)
-                        run.font.size, run.font.name, run.font.bold = Pt(9), 'Arial Narrow', False
-                        p.paragraph_format.line_spacing = 1.0
+                t2 = tables[2]
+                header_row_idx, col_earn, col_deduct = -1, -1, -1
+                for r_idx in range(min(5, len(t2.rows))):
+                    amount_indices = [c_idx for c_idx, cell in enumerate(t2.rows[r_idx].cells) if 'Amount' in cell.text]
+                    if len(amount_indices) >= 2:
+                        header_row_idx, col_earn, col_deduct = r_idx, amount_indices[0], amount_indices[-1]
                         break
 
-            shrink_empty_lines(doc)
+                if col_earn != -1 and col_deduct != -1:
+                    def fill_left(label, val):
+                        for r in range(header_row_idx + 1, len(t2.rows)):
+                            if normalize_key(label) in normalize_key(
+                                    "".join([c.text for c in t2.rows[r].cells[:col_earn]])):
+                                set_cell_text(t2.rows[r].cells[col_earn], val)
+                                break
 
-            # 将单个文档保存到内存
-            doc_buffer = io.BytesIO()
-            doc.save(doc_buffer)
-            doc_buffer.seek(0)
+                    def fill_right(label, val):
+                        for r in range(header_row_idx + 1, len(t2.rows)):
+                            if normalize_key(label) in normalize_key("".join([c.text for c in t2.rows[r].cells])):
+                                set_cell_text(t2.rows[r].cells[col_deduct], val)
+                                break
 
-            # 写入 ZIP 文件中（自动按船名建立文件夹）
-            safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
-            safe_emp = clean_filename(emp['Name'])
-            zip_file.writestr(f"{safe_vessel}/{safe_emp}.docx", doc_buffer.getvalue())
+                    fill_left('Basic Salary', emp['Basic Salary'])
+                    fill_left('Fixed OT', emp['Fixed OT'])
+                    fill_left('Leave Pay', emp['Leave Pay'])
+                    fill_left('Allowance', emp['Allowance'])
+                    fill_left('Total Earnings', emp['Net Salary'])
+                    fill_left('Reimbursement', emp['Reimbursement'])
+                    fill_left('Net Amount', emp['Subtotal'])
+                    fill_right('Total Deductions', emp['Deduction'])
+                    fill_right('Release', emp['Release'])
+                    fill_right('Retaining', emp['Retaining'])
+                    fill_right('Remittance', emp['Remittance'])
+
+                remarks_content = str(emp['Remarks']).strip()
+                if remarks_content and remarks_content.lower() != 'nan' and remarks_content != '0':
+                    for p in doc.paragraphs:
+                        if "Remarks:" in p.text:
+                            run = p.add_run(" " + remarks_content)
+                            run.font.size, run.font.name, run.font.bold = Pt(9), 'Arial Narrow', False
+                            p.paragraph_format.line_spacing = 1.0
+                            break
+
+                shrink_empty_lines(doc)
+
+                safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
+                safe_emp = clean_filename(emp['Name'])
+                temp_file_base = f"{safe_vessel}===SEP==={safe_emp}"
+
+                # 1. 保存正常排版的 Word
+                temp_docx_path = os.path.join(temp_dir, f"{temp_file_base}.docx")
+                doc.save(temp_docx_path)
+
+                # 2. 修改边距，保存为专供 PDF 渲染的过渡 Word
+                pdf_section = doc.sections[0]
+                pdf_section.top_margin = Cm(1.5)  # 控制内港 PDF 的整体高度
+                temp_pdf_docx_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.docx")
+                doc.save(temp_pdf_docx_path)
+
+            # --- 阶段二：集中火力，批量进行 PDF 转换 ---
+            docs_to_convert = glob.glob(os.path.join(temp_dir, "*_for_pdf.docx"))
+            if docs_to_convert:
+                cmd = ['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', temp_dir] + docs_to_convert
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # --- 阶段三：将所有生成好的文件统一打包 ---
+            for emp in employees:
+                safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
+                safe_emp = clean_filename(emp['Name'])
+                temp_file_base = f"{safe_vessel}===SEP==={safe_emp}"
+
+                # 写入正常的 Word 版本
+                temp_docx_path = os.path.join(temp_dir, f"{temp_file_base}.docx")
+                if os.path.exists(temp_docx_path):
+                    with open(temp_docx_path, 'rb') as f:
+                        zip_file.writestr(f"Word_Version/{safe_vessel}/{safe_emp}.docx", f.read())
+
+                # 写入批量生成的 PDF 版本
+                temp_pdf_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.pdf")
+                if os.path.exists(temp_pdf_path):
+                    with open(temp_pdf_path, 'rb') as f:
+                        zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
 
     zip_buffer.seek(0)
     return zip_buffer
@@ -728,150 +770,174 @@ if st.sidebar.button("Log Out Safely"):
 
 
 # --- 5. Data Retrieval & Tabs ---
+# --- 5. Data Retrieval & Tabs ---
 @st.cache_data(ttl=60)
 def get_ships_list(role, user):
     with get_engine().connect() as conn:
-        if role == 'admin':
+        # 修改：让 payroll 角色也能通过验证（虽然他们看不到填报页，但防止底层数据报错）
+        if role in ['admin', 'payroll']:
             return pd.read_sql_query(text("SELECT id, ship_name FROM ships ORDER BY ship_name"), conn)
         return pd.read_sql_query(text("SELECT id, ship_name FROM ships WHERE manager_name = :u ORDER BY ship_name"),
                                  conn, params={"u": user})
 
+
 ships_df = get_ships_list(st.session_state.role, st.session_state.username)
 
-t_labels = ["Filling & Querying"]
-if st.session_state.role == 'admin': t_labels.append("Admin Console")
-t_labels.append("Report Center")
-tabs = st.tabs(t_labels)
+# =========================================================
+# 🛠️ 动态构建多角色 Tab 标签页 (核心权限控制)
+# =========================================================
+t_labels = []
 
-# --- Tab 1: Operations ---
-with tabs[0]:
-    if ships_df.empty:
-        st.warning("No vessels have been assigned yet.")
-    else:
-        selected_ship = st.selectbox("Select a vessel", ships_df['ship_name'].tolist(), index=st.session_state.ship_index)
-        ship_id = int(ships_df[ships_df['ship_name'] == selected_ship]['id'].iloc[0])
-        st.divider()
+# 1. 填报与查询 (除了 payroll 都可以看)
+if st.session_state.role != 'payroll':
+    t_labels.append("Filling & Querying")
 
-        col_hist, col_input = st.columns([1.2, 1])
-
-        # A. History Record
-        with col_hist:
-            st.subheader("History Record")
-
-            if st.session_state.confirm_del_id:
-                st.warning(f"Prepare to delete the record. (ID: {st.session_state.confirm_del_id})")
-                d_col1, d_col2 = st.columns(2)
-                with d_col1:
-                    if st.button("Confirm deletion", key="confirm_real_del"):
-                        with get_engine().begin() as conn:
-                            conn.execute(text("DELETE FROM reports WHERE id = :id"),
-                                         {"id": st.session_state.confirm_del_id})
-                        st.session_state.confirm_del_id = None
-                        st.success("The record has been permanently deleted.")
-                        time.sleep(1)
-                        st.rerun()
-                with d_col2:
-                    if st.button("Cancel Delete", key="cancel_real_del"):
-                        st.session_state.confirm_del_id = None
-                        st.rerun()
-                st.divider()
-
-            with get_engine().connect() as conn:
-                h_df = pd.read_sql_query(text(
-                    "SELECT id, report_date, this_week_issue, remarks FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 10"),
-                    conn, params={"sid": ship_id})
-
-            if not h_df.empty:
-                for idx, row in h_df.iterrows():
-                    is_editing = st.session_state.editing_id == row['id']
-                    with st.expander(f"{row['report_date']} Content Details", expanded=is_editing):
-                        if is_editing:
-                            new_val = st.text_area("Modifications:", value=row['this_week_issue'], key=f"ed_{row['id']}")
-                            if st.button("Save Updates", key=f"save_{row['id']}"):
-                                with get_engine().begin() as conn:
-                                    conn.execute(text("UPDATE reports SET this_week_issue = :t WHERE id = :id"),
-                                                 {"t": new_val, "id": row['id']})
-                                st.session_state.editing_id = None
-                                st.rerun()
-                        else:
-                            raw_content = row['this_week_issue']
-                            clean_lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in raw_content.split('\n') if l.strip()]
-                            st.text("\n".join([f"{i + 1}. {text}" for i, text in enumerate(clean_lines)]))
-
-                            cb1, cb2 = st.columns(2)
-                            with cb1:
-                                if st.button("Modify", key=f"eb_{row['id']}"):
-                                    st.session_state.editing_id = row['id']
-                                    st.rerun()
-                            with cb2:
-                                if st.button("Delete", key=f"db_{row['id']}"):
-                                    st.session_state.confirm_del_id = row['id']
-                                    st.rerun()
-            else:
-                st.info("The vessel has no history.")
-
-        # B. Data Input (Indentation fixed to align perfectly with col_hist)
-        with col_input:
-            st.subheader(f"Fill in - {selected_ship}")
-
-            def handle_submit(sid):
-                latest_issue = st.session_state.get(f"ta_{sid}", "")
-                latest_remark = st.session_state.get(f"rem_{sid}", "")
-
-                if latest_issue.strip():
-                    with get_engine().begin() as conn:
-                        conn.execute(text(
-                            "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
-                            {"sid": sid, "dt": datetime.now().date(), "iss": latest_issue, "rem": latest_remark})
-
-                    st.session_state[f"ta_{sid}"] = ""
-                    st.session_state[f"rem_{sid}"] = ""
-                    st.session_state.drafts[sid] = ""
-                    st.toast(f"{selected_ship} Data submission successful!")
-
-            if st.button("Import information about the ship from last week.", key=f"import_{ship_id}", use_container_width=True):
-                with get_engine().connect() as conn:
-                    last_rec = conn.execute(text(
-                        "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
-                        {"sid": ship_id}).fetchone()
-                    if last_rec:
-                        st.session_state[f"ta_{ship_id}"] = last_rec[0]
-                        st.success("The latest content has been loaded; you can continue editing.")
-                        time.sleep(0.5)
-                        st.rerun()
-                    else:
-                        st.warning("No history found.")
-
-            if f"ta_{ship_id}" not in st.session_state:
-                st.session_state[f"ta_{ship_id}"] = ""
-            if f"rem_{ship_id}" not in st.session_state:
-                st.session_state[f"rem_{ship_id}"] = ""
-
-            st.text_area("This week's issue (one line per issue):", height=350, key=f"ta_{ship_id}")
-            st.text_input("Remarks (optional)", key=f"rem_{ship_id}")
-
-            st.button(
-                "Submit Information",
-                use_container_width=True,
-                on_click=handle_submit,
-                args=(ship_id,)
-            )
-
-        st.divider()
-        n1, _, n3 = st.columns([1, 4, 1])
-        with n1:
-            if st.button("Previous"):
-                st.session_state.ship_index = (st.session_state.ship_index - 1) % len(ships_df)
-                st.rerun()
-        with n3:
-            if st.button("Next"):
-                st.session_state.ship_index = (st.session_state.ship_index + 1) % len(ships_df)
-                st.rerun()
-
-
-# --- Tab 2: Admin Console ---
+# 2. 管理员控制台 (仅 admin 可以看)
 if st.session_state.role == 'admin':
-    with tabs[1]:
+    t_labels.append("Admin Console")
+
+# 3. 薪资单生成中心 (admin 和 payroll 可以看)
+if st.session_state.role in ['admin', 'payroll']:
+    t_labels.append("Payslip Center")
+
+# 4. 报表中心 (除了 payroll 都可以看)
+if st.session_state.role != 'payroll':
+    t_labels.append("Report Center")
+
+# 生成动态标签页
+tabs = st.tabs(t_labels)
+tab_idx = 0  # 用于追踪当前该渲染第几个 Tab
+
+# =========================================================
+# --- Tab: Operations (Filling & Querying) ---
+# =========================================================
+if st.session_state.role != 'payroll':
+    with tabs[tab_idx]:
+        if ships_df.empty:
+            st.warning("No vessels have been assigned yet.")
+        else:
+            selected_ship = st.selectbox("Select a vessel", ships_df['ship_name'].tolist(),
+                                         index=st.session_state.ship_index)
+            ship_id = int(ships_df[ships_df['ship_name'] == selected_ship]['id'].iloc[0])
+            st.divider()
+
+            col_hist, col_input = st.columns([1.2, 1])
+
+            # A. History Record
+            with col_hist:
+                st.subheader("History Record")
+                if st.session_state.confirm_del_id:
+                    st.warning(f"Prepare to delete the record. (ID: {st.session_state.confirm_del_id})")
+                    d_col1, d_col2 = st.columns(2)
+                    with d_col1:
+                        if st.button("Confirm deletion", key="confirm_real_del"):
+                            with get_engine().begin() as conn:
+                                conn.execute(text("DELETE FROM reports WHERE id = :id"),
+                                             {"id": st.session_state.confirm_del_id})
+                            st.session_state.confirm_del_id = None
+                            st.success("The record has been permanently deleted.")
+                            time.sleep(1)
+                            st.rerun()
+                    with d_col2:
+                        if st.button("Cancel Delete", key="cancel_real_del"):
+                            st.session_state.confirm_del_id = None
+                            st.rerun()
+                    st.divider()
+
+                with get_engine().connect() as conn:
+                    h_df = pd.read_sql_query(text(
+                        "SELECT id, report_date, this_week_issue, remarks FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 10"),
+                        conn, params={"sid": ship_id})
+
+                if not h_df.empty:
+                    for idx, row in h_df.iterrows():
+                        is_editing = st.session_state.editing_id == row['id']
+                        with st.expander(f"{row['report_date']} Content Details", expanded=is_editing):
+                            if is_editing:
+                                new_val = st.text_area("Modifications:", value=row['this_week_issue'],
+                                                       key=f"ed_{row['id']}")
+                                if st.button("Save Updates", key=f"save_{row['id']}"):
+                                    with get_engine().begin() as conn:
+                                        conn.execute(text("UPDATE reports SET this_week_issue = :t WHERE id = :id"),
+                                                     {"t": new_val, "id": row['id']})
+                                    st.session_state.editing_id = None
+                                    st.rerun()
+                            else:
+                                raw_content = row['this_week_issue']
+                                clean_lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in raw_content.split('\n')
+                                               if l.strip()]
+                                st.text("\n".join([f"{i + 1}. {text}" for i, text in enumerate(clean_lines)]))
+
+                                cb1, cb2 = st.columns(2)
+                                with cb1:
+                                    if st.button("Modify", key=f"eb_{row['id']}"):
+                                        st.session_state.editing_id = row['id']
+                                        st.rerun()
+                                with cb2:
+                                    if st.button("Delete", key=f"db_{row['id']}"):
+                                        st.session_state.confirm_del_id = row['id']
+                                        st.rerun()
+                else:
+                    st.info("The vessel has no history.")
+
+            # B. Data Input
+            with col_input:
+                st.subheader(f"Fill in - {selected_ship}")
+
+
+                def handle_submit(sid):
+                    latest_issue = st.session_state.get(f"ta_{sid}", "")
+                    latest_remark = st.session_state.get(f"rem_{sid}", "")
+                    if latest_issue.strip():
+                        with get_engine().begin() as conn:
+                            conn.execute(text(
+                                "INSERT INTO reports (ship_id, report_date, this_week_issue, remarks) VALUES (:sid, :dt, :iss, :rem)"),
+                                {"sid": sid, "dt": datetime.now().date(), "iss": latest_issue, "rem": latest_remark})
+                        st.session_state[f"ta_{sid}"] = ""
+                        st.session_state[f"rem_{sid}"] = ""
+                        st.session_state.drafts[sid] = ""
+                        st.toast(f"{selected_ship} Data submission successful!")
+
+
+                if st.button("Import information about the ship from last week.", key=f"import_{ship_id}",
+                             use_container_width=True):
+                    with get_engine().connect() as conn:
+                        last_rec = conn.execute(text(
+                            "SELECT this_week_issue FROM reports WHERE ship_id = :sid AND is_deleted_by_user = FALSE ORDER BY report_date DESC LIMIT 1"),
+                            {"sid": ship_id}).fetchone()
+                        if last_rec:
+                            st.session_state[f"ta_{ship_id}"] = last_rec[0]
+                            st.success("The latest content has been loaded; you can continue editing.")
+                            time.sleep(0.5)
+                            st.rerun()
+                        else:
+                            st.warning("No history found.")
+
+                if f"ta_{ship_id}" not in st.session_state: st.session_state[f"ta_{ship_id}"] = ""
+                if f"rem_{ship_id}" not in st.session_state: st.session_state[f"rem_{ship_id}"] = ""
+
+                st.text_area("This week's issue (one line per issue):", height=350, key=f"ta_{ship_id}")
+                st.text_input("Remarks (optional)", key=f"rem_{ship_id}")
+                st.button("Submit Information", use_container_width=True, on_click=handle_submit, args=(ship_id,))
+
+            st.divider()
+            n1, _, n3 = st.columns([1, 4, 1])
+            with n1:
+                if st.button("Previous"):
+                    st.session_state.ship_index = (st.session_state.ship_index - 1) % len(ships_df)
+                    st.rerun()
+            with n3:
+                if st.button("Next"):
+                    st.session_state.ship_index = (st.session_state.ship_index + 1) % len(ships_df)
+                    st.rerun()
+
+    tab_idx += 1  # 游标加 1，准备渲染下一个标签页
+
+# =========================================================
+# --- Tab: Admin Console ---
+# =========================================================
+if st.session_state.role == 'admin':
+    with tabs[tab_idx]:
         st.subheader("Global Management View")
 
         m_df = pd.read_sql_query(text("""
@@ -894,39 +960,36 @@ if st.session_state.role == 'admin':
         else:
             st.info("No global report data available.")
 
-        # =========================================================
-        # ✅ 工资单自动化生成区 (内港与外港彻底分离)
-        # =========================================================
-        st.write("---")
-        st.subheader("Automated Payslips Generator")
+    tab_idx += 1
 
-        # 使用单选按钮让用户明确选择操作模式
+# =========================================================
+# --- Tab: Payslip Center (全新独立界面) ---
+# =========================================================
+if st.session_state.role in ['admin', 'payroll']:
+    with tabs[tab_idx]:
+        st.subheader("Automated Payslips Generator")
+        st.markdown("专门用于内港和外港的自动化薪资单据生成引擎。")
+        st.write("---")
+
         payslips_mode = st.radio(
             "Select Payslips Type:",
             ["In Port Payslips", "Out Port Payslips"],
             horizontal=True
         )
+        st.write("")
 
-        st.write("")  # 留一行空白让界面更透气
-
-        # ---------------------------------------------------------
-        # 模式 A: 内港 (In Port) - 仅生成 Word
-        # ---------------------------------------------------------
+        # 模式 A: 内港
         if payslips_mode == "In Port Payslips":
-            st.info("In Port Mode: Generates Word documents.")
-
-            # 注意：加入了 key 参数，防止上传框冲突
+            st.info("In Port Mode: Generates BOTH Word and PDF documents using 'payslip模版.docx'.")
             uploaded_in_port = st.file_uploader("Upload 'SUM-SAL' Excel file (In Port)", type=["xlsx"], key="upload_in")
 
             if uploaded_in_port is not None:
-                if st.button("Generate In Port payslips (Word ZIP)", use_container_width=True):
-                    with st.spinner("Please wait"):
+                if st.button("Generate In Port Payslips (Word & PDF ZIP)", use_container_width=True):
+                    with st.spinner("Processing documents and batch converting PDFs via LibreOffice... Please wait."):
                         try:
                             uploaded_in_port.seek(0)
-                            # 调用基础版函数
                             zip_data_in = generate_payslip_zip(uploaded_in_port)
-                            st.success("Successfully generated In Port Payslips!")
-
+                            st.success("Successfully generated In Port Word & PDF Payslips!")
                             st.download_button(
                                 label="Download In Port Payslips (.zip)",
                                 data=zip_data_in,
@@ -937,25 +1000,20 @@ if st.session_state.role == 'admin':
                         except Exception as e:
                             st.error(f"Error generating In Port Payslips: {e}")
 
-        # ---------------------------------------------------------
-        # 模式 B: 外港 (Out Port) - 动态计算 + 生成 Word 和 PDF
-        # ---------------------------------------------------------
+        # 模式 B: 外港
         else:
-            st.info(
-                "Out Port Mode: generates BOTH Word and PDF documents.")
-
+            st.info("Out Port Mode: Generates BOTH Word and PDF documents using 'Out_port paylist 模版.docx'.")
             uploaded_out_port = st.file_uploader("Upload 'SUM-SAL' Excel file (Out Port)", type=["xlsx"],
                                                  key="upload_out")
 
             if uploaded_out_port is not None:
                 if st.button("Generate Out Port Payslips (Word & PDF ZIP)", use_container_width=True):
-                    with st.spinner("Please wait"):
+                    with st.spinner(
+                            "Processing calculations and batch converting PDFs via LibreOffice... Please wait."):
                         try:
                             uploaded_out_port.seek(0)
-                            # 调用进阶版函数
                             zip_data_out = generate_advanced_payslips_zip(uploaded_out_port)
                             st.success("Successfully generated Out Port Word & PDF payslips!")
-
                             st.download_button(
                                 label="Download Out Port Payslips (.zip)",
                                 data=zip_data_out,
@@ -965,112 +1023,100 @@ if st.session_state.role == 'admin':
                             )
                         except Exception as e:
                             st.error(f"Error generating Out Port Payslips: {e}")
-# --- Tab 3: Report Center ---
-with tabs[-1]:
-    st.subheader("Automated Information Preview & Export")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        start_d = st.date_input("Start Date", value=datetime.now() - timedelta(days=7), key="rep_start")
-    with c2:
-        end_d = st.date_input("End Date", value=datetime.now(), key="rep_end")
+    tab_idx += 1
 
-    with get_engine().connect() as conn:
-        query = """
-                SELECT r.report_date as "Date", s.ship_name as "Vessel", 
-                       r.this_week_issue as "Report Content", s.manager_name as "Manager"
-                FROM reports r 
-                JOIN ships s ON r.ship_id = s.id
-                WHERE r.report_date BETWEEN :s AND :e 
-                AND r.is_deleted_by_user = FALSE
-            """
-        params = {"s": start_d, "e": end_d}
+# =========================================================
+# --- Tab: Report Center ---
+# =========================================================
+if st.session_state.role != 'payroll':
+    with tabs[tab_idx]:
+        st.subheader("Automated Information Preview & Export")
 
-        if st.session_state.role != 'admin':
-            query += " AND s.manager_name = :u"
-            params["u"] = st.session_state.username
+        c1, c2 = st.columns(2)
+        with c1:
+            start_d = st.date_input("Start Date", value=datetime.now() - timedelta(days=7), key="rep_start")
+        with c2:
+            end_d = st.date_input("End Date", value=datetime.now(), key="rep_end")
 
-        query += " ORDER BY r.report_date DESC"
-        export_df = pd.read_sql_query(text(query), conn, params=params)
+        with get_engine().connect() as conn:
+            query = """
+                    SELECT r.report_date as "Date", s.ship_name as "Vessel", 
+                           r.this_week_issue as "Report Content", s.manager_name as "Manager"
+                    FROM reports r 
+                    JOIN ships s ON r.ship_id = s.id
+                    WHERE r.report_date BETWEEN :s AND :e 
+                    AND r.is_deleted_by_user = FALSE
+                """
+            params = {"s": start_d, "e": end_d}
 
-    st.write("---")
+            if st.session_state.role != 'admin':
+                query += " AND s.manager_name = :u"
+                params["u"] = st.session_state.username
 
-    # =========================================================
-    # 📝 船舶汇报顺序装载区 (自动检测本地文件 + 允许手动上传覆盖)
-    # =========================================================
-    st.subheader("Report Export Settings (报告导出设置)")
-    order_list = None
+            query += " ORDER BY r.report_date DESC"
+            export_df = pd.read_sql_query(text(query), conn, params=params)
 
-    # 提供一个上传框供随时替换顺序
-    order_file = st.file_uploader("Upload '会议船舶顺序.xlsx' to set report order (上传顺序表 - 可选)",
-                                  type=["xlsx", "csv"], key="order_uploader")
+        st.write("---")
+        st.subheader("Report Export Settings (报告导出设置)")
+        order_list = None
 
-    if order_file is not None:
-        try:
-            if order_file.name.endswith('.csv'):
-                order_df = pd.read_csv(order_file)
-            else:
-                order_df = pd.read_excel(order_file)
+        order_file = st.file_uploader("Upload '会议船舶顺序.xlsx' to set report order (上传顺序表 - 可选)",
+                                      type=["xlsx", "csv"], key="order_uploader")
 
-            # 智能提取船舶名称 (优先寻找 'Vessel Name' 列，如果没有则默认取第二列)
-            if 'Vessel Name' in order_df.columns:
-                order_list = order_df['Vessel Name'].dropna().astype(str).tolist()
-            elif len(order_df.columns) >= 2:
-                order_list = order_df.iloc[:, 1].dropna().astype(str).tolist()
-
-            st.success(f"Successfully loaded order list with {len(order_list)} vessels. (已成功读取上传的顺序表)")
-        except Exception as e:
-            st.error(f"Error reading order file: {e}")
-    else:
-        # 如果没有手动上传，默认去服务器目录寻找 `会议船舶顺序.xlsx`
-        local_order_path = "会议船舶顺序.xlsx"
-        if os.path.exists(local_order_path):
+        if order_file is not None:
             try:
-                order_df = pd.read_excel(local_order_path)
+                if order_file.name.endswith('.csv'):
+                    order_df = pd.read_csv(order_file)
+                else:
+                    order_df = pd.read_excel(order_file)
+
                 if 'Vessel Name' in order_df.columns:
                     order_list = order_df['Vessel Name'].dropna().astype(str).tolist()
                 elif len(order_df.columns) >= 2:
                     order_list = order_df.iloc[:, 1].dropna().astype(str).tolist()
-                st.info(f"Using server's default vessel order: {len(order_list)} vessels. (已加载服务器默认船舶顺序)")
-            except:
-                pass
+                st.success(f"Successfully loaded order list with {len(order_list)} vessels. (已成功读取上传的顺序表)")
+            except Exception as e:
+                st.error(f"Error reading order file: {e}")
+        else:
+            local_order_path = "会议船舶顺序.xlsx"
+            if os.path.exists(local_order_path):
+                try:
+                    order_df = pd.read_excel(local_order_path)
+                    if 'Vessel Name' in order_df.columns:
+                        order_list = order_df['Vessel Name'].dropna().astype(str).tolist()
+                    elif len(order_df.columns) >= 2:
+                        order_list = order_df.iloc[:, 1].dropna().astype(str).tolist()
+                    st.info(
+                        f"Using server's default vessel order: {len(order_list)} vessels. (已加载服务器默认船舶顺序)")
+                except:
+                    pass
 
-    st.write("---")
+        st.write("---")
 
-    # =========================================================
-    # 下载导出区
-    # =========================================================
-    if not export_df.empty:
-        excel_prep_df = export_df.rename(columns={
-            "Manager": "manager_name",
-            "Vessel": "ship_name",
-            "Report Content": "this_week_issue"
-        })
-
-        bc1, bc2 = st.columns(2)
-        with bc1:
-            # ✅ 把找好的 order_list 传进生成函数中
-            excel_bin = generate_custom_excel(excel_prep_df, order_list)
-            st.download_button(
-                label="Download Excel Report",
-                data=excel_bin,
-                file_name=f"Trust_Ship_Report_{start_d}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-
-        if st.session_state.role == 'admin':
-            with bc2:
-                if st.button("Generate PPT Summary Preview", use_container_width=True):
-                    # ✅ 把找好的 order_list 传进生成函数中
-                    ppt_bin = create_ppt_report(excel_prep_df, start_d, end_d, order_list)
-
-                    st.download_button(
-                        label="Click to Download PPT File",
-                        data=ppt_bin,
-                        file_name=f"Ship_Meeting_{start_d}.pptx",
-                        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                        use_container_width=True
-                    )
-    else:
-        st.info("There is currently no data available for you to view within this date range.")
+        if not export_df.empty:
+            excel_prep_df = export_df.rename(
+                columns={"Manager": "manager_name", "Vessel": "ship_name", "Report Content": "this_week_issue"})
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                excel_bin = generate_custom_excel(excel_prep_df, order_list)
+                st.download_button(
+                    label="Download Excel Report",
+                    data=excel_bin,
+                    file_name=f"Trust_Ship_Report_{start_d}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            if st.session_state.role == 'admin':
+                with bc2:
+                    if st.button("Generate PPT Summary Preview", use_container_width=True):
+                        ppt_bin = create_ppt_report(excel_prep_df, start_d, end_d, order_list)
+                        st.download_button(
+                            label="Click to Download PPT File",
+                            data=ppt_bin,
+                            file_name=f"Ship_Meeting_{start_d}.pptx",
+                            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            use_container_width=True
+                        )
+        else:
+            st.info("There is currently no data available for you to view within this date range.")
