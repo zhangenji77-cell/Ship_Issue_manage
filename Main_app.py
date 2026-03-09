@@ -968,7 +968,6 @@ if st.session_state.role == 'admin':
 if st.session_state.role in ['admin', 'payroll']:
     with tabs[tab_idx]:
         st.subheader("Automated Payslips Generator")
-        st.markdown("专门用于内港和外港的自动化薪资单据生成引擎。")
         st.write("---")
 
         payslips_mode = st.radio(
@@ -980,12 +979,12 @@ if st.session_state.role in ['admin', 'payroll']:
 
         # 模式 A: 内港
         if payslips_mode == "In Port Payslips":
-            st.info("In Port Mode: Generates BOTH Word and PDF documents using 'payslip模版.docx'.")
+            st.info("In Port Mode: Generates BOTH Word and PDF documents")
             uploaded_in_port = st.file_uploader("Upload 'SUM-SAL' Excel file (In Port)", type=["xlsx"], key="upload_in")
 
             if uploaded_in_port is not None:
                 if st.button("Generate In Port Payslips (Word & PDF ZIP)", use_container_width=True):
-                    with st.spinner("Processing documents and batch converting PDFs via LibreOffice... Please wait."):
+                    with st.spinner("Please wait"):
                         try:
                             uploaded_in_port.seek(0)
                             zip_data_in = generate_payslip_zip(uploaded_in_port)
@@ -1002,14 +1001,14 @@ if st.session_state.role in ['admin', 'payroll']:
 
         # 模式 B: 外港
         else:
-            st.info("Out Port Mode: Generates BOTH Word and PDF documents using 'Out_port paylist 模版.docx'.")
+            st.info("Out Port Mode: Generates BOTH Word and PDF documents")
             uploaded_out_port = st.file_uploader("Upload 'SUM-SAL' Excel file (Out Port)", type=["xlsx"],
                                                  key="upload_out")
 
             if uploaded_out_port is not None:
                 if st.button("Generate Out Port Payslips (Word & PDF ZIP)", use_container_width=True):
                     with st.spinner(
-                            "Processing calculations and batch converting PDFs via LibreOffice... Please wait."):
+                            "Please wait"):
                         try:
                             uploaded_out_port.seek(0)
                             zip_data_out = generate_advanced_payslips_zip(uploaded_out_port)
@@ -1058,7 +1057,7 @@ if st.session_state.role != 'payroll':
             export_df = pd.read_sql_query(text(query), conn, params=params)
 
         st.write("---")
-        st.subheader("Report Export Settings (报告导出设置)")
+        st.subheader("Report Export Settings")
         order_list = None
 
         order_file = st.file_uploader("Upload '会议船舶顺序.xlsx' to set report order (上传顺序表 - 可选)",
@@ -1088,7 +1087,7 @@ if st.session_state.role != 'payroll':
                     elif len(order_df.columns) >= 2:
                         order_list = order_df.iloc[:, 1].dropna().astype(str).tolist()
                     st.info(
-                        f"Using server's default vessel order: {len(order_list)} vessels. (已加载服务器默认船舶顺序)")
+                        f"Using server's default vessel order: {len(order_list)} vessels.")
                 except:
                     pass
 
