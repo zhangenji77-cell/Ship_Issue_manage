@@ -260,7 +260,7 @@ def format_date_custom(val):
         return str(val)
 
 
-def set_cell_text(cell, text):
+def set_cell_text(cell, text=1.0):
     if text is None: text = ""
     text = str(text)
     if text.endswith(".0"): text = text[:-2]
@@ -273,7 +273,6 @@ def set_cell_text(cell, text):
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(0)
     p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1.5
 
 
 def shrink_empty_lines(doc):
@@ -389,9 +388,9 @@ def generate_paylist_zip(uploaded_excel):
                 for row in table.rows:
                     for c, cell in enumerate(row.cells):
                         if label in cell.text and c + 1 < len(row.cells):
-                            set_cell_text(row.cells[c + 1], value)
+                            # 💡 在这里加上 custom_spacing=1.5，让这些头部信息保持 1.5 倍行距
+                            set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
                             return
-
             fill_simple(tables[0], "Employee's Name", emp['Name'])
             fill_simple(tables[0], "Vessel Name", emp['Vessel Name'])
             fill_simple(tables[1], "Rank", emp['Rank'])
@@ -562,9 +561,9 @@ def generate_advanced_paylist_zip(uploaded_excel):
                             if label in ["TO", "FROM", "Rank"] and txt not in [label, f"{label}:",
                                                                                f"{label} :"]: continue
                             if label in cell.text and c + 1 < len(row.cells):
-                                set_cell_text(row.cells[c + 1], value)
+                                # 💡 同样在这里加上 custom_spacing=1.5
+                                set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
                                 return
-
                 for table in doc.tables[:2]:
                     fill_simple(table, "Employee's Name", emp['Name'])
                     fill_simple(table, "Vessel Name", emp['Vessel Name'])
