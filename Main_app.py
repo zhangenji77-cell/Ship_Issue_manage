@@ -1,6 +1,7 @@
 import time
 import re
 import io
+import glob
 import os
 import zipfile
 import tempfile
@@ -555,8 +556,13 @@ def generate_advanced_payslips_zip(uploaded_excel):
     zip_buffer = io.BytesIO()
 
     # 开启安全屋，利用 LibreOffice 生成 PDF
+    # 开启安全屋，利用 LibreOffice 生成 PDF
     with tempfile.TemporaryDirectory() as temp_dir:
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+
+            # ==========================================
+            # 🚀 第一阶段：极速生成所有的 Word 过渡文件
+            # ==========================================
             for emp in employees:
                 # ⚠️ 确保服务器里上传了这个新模版文件
                 doc = Document('Out_port paylist 模版.docx')
@@ -573,12 +579,12 @@ def generate_advanced_payslips_zip(uploaded_excel):
                             if label in ["TO", "FROM", "Rank"] and txt not in [label, f"{label}:",
                                                                                f"{label} :"]: continue
                             if label in cell.text and c + 1 < len(row.cells):
-                                # 💡 同样加上精准的条件判断
                                 if label in ["Rank", "FROM", "TO", "Day on Board"]:
                                     set_cell_text(row.cells[c + 1], value, custom_spacing=1.5)
                                 else:
                                     set_cell_text(row.cells[c + 1], value, custom_spacing=1.0)
                                 return
+
                 for table in doc.tables[:2]:
                     fill_simple(table, "Employee's Name", emp['Name'])
                     fill_simple(table, "Vessel Name", emp['Vessel Name'])
@@ -638,39 +644,50 @@ def generate_advanced_payslips_zip(uploaded_excel):
                 safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
                 safe_emp = clean_filename(emp['Name'])
 
-                # 保存为 Word
-                # 1. 首先，将排版正常的【纯 Word 版】原封不动地保存下来
-                # 1. 首先，将排版正常的【纯 Word 版】原封不动地保存下来
-                temp_docx_path = os.path.join(temp_dir, f"{safe_emp}.docx")
+                # 给临时文件加个前缀，防止同名同姓的员工发生文件覆盖冲突
+                temp_file_base = f"{safe_vessel}===SEP==={safe_emp}"
+
+                # 1. 保存正常排版的 Word
+                temp_docx_path = os.path.join(temp_dir, f"{temp_file_base}.docx")
                 doc.save(temp_docx_path)
 
-                # 2. ⚡️ 核心魔法：专门为 PDF 版本单独“提升天花板” ⚡️
-                # 我们不再去挤压标题，而是直接修改这个临时 PDF 文件的顶部边距
+                # 2. 修改边距，保存为专供 PDF 渲染的过渡 Word
                 pdf_section = doc.sections[0]
-
-                # 💡 调节这里的数值：
-                # 如果你想让 PDF 整体再往上移，就把 Cm(1.5) 改小，比如 Cm(1.0) 或 Cm(0.5)
-                # 如果太靠上撞到了 Logo，就改大，比如 Cm(2.0)
                 pdf_section.top_margin = Cm(1.5)
-
-                # 3. 把修改了边距的文档保存为一个专门用来转 PDF 的临时过渡文件
-                temp_pdf_docx_path = os.path.join(temp_dir, f"{safe_emp}_for_pdf.docx")
+                temp_pdf_docx_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.docx")
                 doc.save(temp_pdf_docx_path)
 
-                # 4. 让 LibreOffice 去转换这个专门为 PDF 定制的过渡文件
-                subprocess.run([
-                    'libreoffice', '--headless', '--convert-to', 'pdf',
-                    '--outdir', temp_dir, temp_pdf_docx_path
-                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # ==========================================
+            # 🚀 第二阶段：集中火力，批量进行 PDF 转换 (提速核心！)
+            # ==========================================
+            # 获取所有以 _for_pdf.docx 结尾的临时文件
+            docs_to_convert = glob.glob(os.path.join(temp_dir, "*_for_pdf.docx"))
 
-                # 5. 将定制生成的 PDF 和最初那个正常的 Word 打包进 ZIP
-                temp_pdf_path = os.path.join(temp_dir, f"{safe_emp}_for_pdf.pdf")
+            if docs_to_convert:
+                # 把所有文件作为参数一次性塞给 LibreOffice，它会不间断地一口气处理完
+                cmd = ['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', temp_dir] + docs_to_convert
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            # ==========================================
+            # 🚀 第三阶段：将所有生成好的文件统一打包
+            # ==========================================
+            for emp in employees:
+                safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
+                safe_emp = clean_filename(emp['Name'])
+                temp_file_base = f"{safe_vessel}===SEP==={safe_emp}"
+
+                # 写入正常的 Word 版本
+                temp_docx_path = os.path.join(temp_dir, f"{temp_file_base}.docx")
+                if os.path.exists(temp_docx_path):
+                    with open(temp_docx_path, 'rb') as f:
+                        zip_file.writestr(f"Word_Version/{safe_vessel}/{safe_emp}.docx", f.read())
+
+                # 写入刚刚批量生成的 PDF 版本
+                temp_pdf_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.pdf")
                 if os.path.exists(temp_pdf_path):
                     with open(temp_pdf_path, 'rb') as f:
+                        # 存入 ZIP 时，去掉 _for_pdf 后缀，让文件显得干干净净
                         zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
-
-                with open(temp_docx_path, 'rb') as f:
-                    zip_file.writestr(f"Word_Version/{safe_vessel}/{safe_emp}.docx", f.read())
 
     zip_buffer.seek(0)
     return zip_buffer
