@@ -51,7 +51,12 @@ def get_engine():
 
 # --- 2. Report Generation Tools ---
 
-def generate_custom_excel(df):
+# --- 2. Report Generation Tools ---
+
+def generate_custom_excel(df, order_list=None):
+    """
+    生成 Excel：支持按自定义列表排序，逐行写入并动态合并相邻相同负责人的单元格
+    """
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Ship Report"
@@ -87,29 +92,50 @@ def generate_custom_excel(df):
 
     df_grouped = df.groupby(['manager_name', 'ship_name'])['this_week_issue'].apply(
         clean_and_reformat_issue).reset_index()
-    df_grouped = df_grouped.sort_values(by='manager_name')
+
+    # 💡 核心排序逻辑
+    if order_list is not None and len(order_list) > 0:
+        # 将顺序表转化为字典映射，忽略大小写和空格以防填错
+        order_map = {str(name).strip().upper(): i for i, name in enumerate(order_list)}
+        df_grouped['sort_order'] = df_grouped['ship_name'].astype(str).str.strip().str.upper().map(order_map)
+        # 顺序表里没有的船，排到最后面
+        df_grouped['sort_order'] = df_grouped['sort_order'].fillna(9999)
+        df_grouped = df_grouped.sort_values(by=['sort_order', 'ship_name'])
+    else:
+        df_grouped = df_grouped.sort_values(by=['manager_name', 'ship_name'])
 
     current_row = 3
-    for manager, group in df_grouped.groupby('manager_name', sort=False):
-        start_merge_row = current_row
-        for _, row_data in group.iterrows():
-            for col in [1, 2]:
-                cell = ws.cell(row=current_row, column=col,
-                               value=row_data['manager_name'] if col == 1 else row_data['ship_name'])
-                cell.font = font_yahei
-                cell.border = black_border
-                cell.alignment = Alignment(horizontal='center', vertical='center')
+    start_merge_row = 3
+    prev_manager = None
 
-            cell_c = ws.cell(row=current_row, column=3, value=row_data['this_week_issue'])
-            cell_c.font = font_yahei
-            cell_c.border = black_border
-            cell_c.alignment = Alignment(wrap_text=True, horizontal='left', vertical='center')
-            current_row += 1
+    for idx, row_data in df_grouped.iterrows():
+        manager = row_data['manager_name']
+        ship = row_data['ship_name']
+        issue = row_data['this_week_issue']
 
-        if len(group) > 1:
-            ws.merge_cells(start_row=start_merge_row, start_column=1, end_row=current_row - 1, end_column=1)
-            for r in range(start_merge_row, current_row):
-                ws.cell(row=r, column=1).border = black_border
+        cell_a = ws.cell(row=current_row, column=1, value=manager)
+        cell_b = ws.cell(row=current_row, column=2, value=ship)
+        cell_c = ws.cell(row=current_row, column=3, value=issue)
+
+        for cell in [cell_a, cell_b, cell_c]:
+            cell.font = font_yahei
+            cell.border = black_border
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        cell_c.alignment = Alignment(wrap_text=True, horizontal='left', vertical='center')
+
+        # 动态合并相邻的负责人单元格
+        if prev_manager != manager:
+            if prev_manager is not None and current_row - 1 > start_merge_row:
+                ws.merge_cells(start_row=start_merge_row, start_column=1, end_row=current_row - 1, end_column=1)
+            start_merge_row = current_row
+            prev_manager = manager
+
+        current_row += 1
+
+    # 循环结束后，处理最后一块需要合并的单元格
+    if prev_manager is not None and current_row - 1 > start_merge_row:
+        ws.merge_cells(start_row=start_merge_row, start_column=1, end_row=current_row - 1, end_column=1)
 
     ws.column_dimensions['A'].width = 20
     ws.column_dimensions['B'].width = 25
@@ -120,7 +146,7 @@ def generate_custom_excel(df):
     return output.getvalue()
 
 
-def create_ppt_report(df, start_date, end_date):
+def create_ppt_report(df, start_date, end_date, order_list=None):
     prs = Presentation()
 
     slide_layout_title = prs.slide_layouts[0]
@@ -133,12 +159,9 @@ def create_ppt_report(df, start_date, end_date):
 
     title = slide.shapes.title
     subtitle = slide.placeholders[1]
-
     title.top = Inches(3.5)
     title.text = "TSM Summary of Weekly Ship Reports"
-
-    current_date = datetime.now().strftime('%Y-%m-%d')
-    subtitle.text = f"Creation Date: {current_date}"
+    subtitle.text = f"Creation Date: {datetime.now().strftime('%Y-%m-%d')}"
     subtitle.top = Inches(4.5)
 
     def clean_and_reformat_ppt(series):
@@ -154,7 +177,15 @@ def create_ppt_report(df, start_date, end_date):
 
     df_ppt = df.groupby(['manager_name', 'ship_name'], sort=False)['this_week_issue'].apply(
         clean_and_reformat_ppt).reset_index()
-    df_ppt = df_ppt.sort_values(by=['manager_name', 'ship_name'])
+
+    # 💡 核心排序逻辑
+    if order_list is not None and len(order_list) > 0:
+        order_map = {str(name).strip().upper(): i for i, name in enumerate(order_list)}
+        df_ppt['sort_order'] = df_ppt['ship_name'].astype(str).str.strip().str.upper().map(order_map)
+        df_ppt['sort_order'] = df_ppt['sort_order'].fillna(9999)
+        df_ppt = df_ppt.sort_values(by=['sort_order', 'ship_name'])
+    else:
+        df_ppt = df_ppt.sort_values(by=['manager_name', 'ship_name'])
 
     for _, row in df_ppt.iterrows():
         manager = row['manager_name']
@@ -173,7 +204,7 @@ def create_ppt_report(df, start_date, end_date):
                 p = tf.add_paragraph()
                 p.text = line
                 p.level = 0
-                p.font.size = Pt(24)
+                p.font.size = Ppt_Pt(24)
                 p.font.name = '微软雅黑'
 
     slide_layout_blank = prs.slide_layouts[6]
@@ -183,7 +214,7 @@ def create_ppt_report(df, start_date, end_date):
     tf_end.text = "Thank you for watching."
     p_end = tf_end.paragraphs[0]
     p_end.alignment = PP_ALIGN.CENTER
-    p_end.font.size = Pt(44)
+    p_end.font.size = Ppt_Pt(44)
     p_end.font.bold = True
     p_end.font.name = '微软雅黑'
 
@@ -934,32 +965,52 @@ with tabs[-1]:
         export_df = pd.read_sql_query(text(query), conn, params=params)
 
     st.write("---")
-    if st.button("Search and preview records within the selected date", use_container_width=True):
-        if not export_df.empty:
-            st.success(f"Found {len(export_df)} records.")
 
-            preview_df = export_df.copy()
+    # =========================================================
+    # 📝 船舶汇报顺序装载区 (自动检测本地文件 + 允许手动上传覆盖)
+    # =========================================================
+    st.subheader("Report Export Settings (报告导出设置)")
+    order_list = None
 
-            def preview_clean(text):
-                lines = [re.sub(r'^\d+[\.、\s]*', '', l.strip()) for l in str(text).split('\n') if l.strip()]
-                return "\n".join([f"{i + 1}. {t}" for i, t in enumerate(lines)])
+    # 提供一个上传框供随时替换顺序
+    order_file = st.file_uploader("Upload '会议船舶顺序.xlsx' to set report order (上传顺序表 - 可选)",
+                                  type=["xlsx", "csv"], key="order_uploader")
 
-            preview_df["Report Content"] = preview_df["Report Content"].apply(preview_clean)
+    if order_file is not None:
+        try:
+            if order_file.name.endswith('.csv'):
+                order_df = pd.read_csv(order_file)
+            else:
+                order_df = pd.read_excel(order_file)
 
-            st.dataframe(
-                preview_df,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Report Content": st.column_config.TextColumn("Detailed Information (Automatically Numbered)", width="large"),
-                    "Date": st.column_config.DateColumn("Date")
-                }
-            )
-        else:
-            st.warning("No reporting records were found within that date range.")
+            # 智能提取船舶名称 (优先寻找 'Vessel Name' 列，如果没有则默认取第二列)
+            if 'Vessel Name' in order_df.columns:
+                order_list = order_df['Vessel Name'].dropna().astype(str).tolist()
+            elif len(order_df.columns) >= 2:
+                order_list = order_df.iloc[:, 1].dropna().astype(str).tolist()
+
+            st.success(f"Successfully loaded order list with {len(order_list)} vessels. (已成功读取上传的顺序表)")
+        except Exception as e:
+            st.error(f"Error reading order file: {e}")
+    else:
+        # 如果没有手动上传，默认去服务器目录寻找 `会议船舶顺序.xlsx`
+        local_order_path = "会议船舶顺序.xlsx"
+        if os.path.exists(local_order_path):
+            try:
+                order_df = pd.read_excel(local_order_path)
+                if 'Vessel Name' in order_df.columns:
+                    order_list = order_df['Vessel Name'].dropna().astype(str).tolist()
+                elif len(order_df.columns) >= 2:
+                    order_list = order_df.iloc[:, 1].dropna().astype(str).tolist()
+                st.info(f"Using server's default vessel order: {len(order_list)} vessels. (已加载服务器默认船舶顺序)")
+            except:
+                pass
 
     st.write("---")
 
+    # =========================================================
+    # 下载导出区
+    # =========================================================
     if not export_df.empty:
         excel_prep_df = export_df.rename(columns={
             "Manager": "manager_name",
@@ -969,7 +1020,8 @@ with tabs[-1]:
 
         bc1, bc2 = st.columns(2)
         with bc1:
-            excel_bin = generate_custom_excel(excel_prep_df)
+            # ✅ 把找好的 order_list 传进生成函数中
+            excel_bin = generate_custom_excel(excel_prep_df, order_list)
             st.download_button(
                 label="Download Excel Report",
                 data=excel_bin,
@@ -981,7 +1033,8 @@ with tabs[-1]:
         if st.session_state.role == 'admin':
             with bc2:
                 if st.button("Generate PPT Summary Preview", use_container_width=True):
-                    ppt_bin = create_ppt_report(excel_prep_df, start_d, end_d)
+                    # ✅ 把找好的 order_list 传进生成函数中
+                    ppt_bin = create_ppt_report(excel_prep_df, start_d, end_d, order_list)
 
                     st.download_button(
                         label="Click to Download PPT File",
