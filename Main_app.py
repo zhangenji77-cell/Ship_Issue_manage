@@ -239,6 +239,26 @@ def clean_filename(name):
     return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 
+def get_rank_priority(rank_str):
+    """根据规定的职位顺序，将 Rank 转化为 1 到 99 的排序序号（仅供系统内部排序使用）"""
+    if not rank_str or pd.isna(rank_str): return 99
+    r = str(rank_str).upper().strip()
+
+    if 'MASTER' in r: return 1
+    if 'CHIEF OFFICER' in r: return 2
+    if '2ND OFFICER' in r or 'SECOND OFFICER' in r: return 3
+    if 'CHIEF ENGINEER' in r: return 4
+    if '2ND ENGINEER' in r or 'SECOND ENGINEER' in r: return 5
+    if '3RD ENGINEER' in r or 'THIRD ENGINEER' in r: return 6
+    if 'ASST BOSUN' in r or 'ASSISTANT BOSUN' in r: return 8
+    if 'BOSUN' in r and 'ASST' not in r: return 7
+    if 'COOK' in r: return 9
+    if r == 'AB' or ' A.B' in f" {r}" or 'ABLE SEAMAN' in r: return 10
+    if 'OILER' in r: return 11
+
+    return 99
+
+
 def format_currency(val):
     if pd.isna(val) or val == "": return ""
     try:
@@ -391,6 +411,10 @@ def generate_payslip_zip(uploaded_excel):
             emp['Remarks'] = get_val('Remarks')
             employees.append(emp)
         i += 1
+
+    # 💡 核心修改：在开始生成 Word/PDF 之前，在内存中直接对人员名单进行排序
+    # 规则：先按“船名”分组，然后按“职位优先级”从高到低排列
+    employees.sort(key=lambda x: (x['Vessel Name'], get_rank_priority(x['Rank'])))
 
     # 3. 启动临时安全屋生成双版本文档 (引入批量 PDF 提速逻辑)
     zip_buffer = io.BytesIO()
@@ -620,6 +644,11 @@ def generate_advanced_payslips_zip(uploaded_excel):
             employees.append(emp)
         i += 1
 
+    # 💡 核心修改：在开始生成 Word/PDF 之前，在内存中直接对人员名单进行排序
+    # 规则：先按“船名”分组，然后按“职位优先级”从高到低排列
+    employees.sort(key=lambda x: (x['Vessel Name'], get_rank_priority(x['Rank'])))
+
+
     zip_buffer = io.BytesIO()
 
     # 开启安全屋，利用 LibreOffice 生成 PDF
@@ -737,24 +766,29 @@ def generate_advanced_payslips_zip(uploaded_excel):
 
             # ==========================================
             # 🚀 第三阶段：将所有生成好的文件统一打包
-            # ==========================================
+
             for emp in employees:
                 safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
                 safe_emp = clean_filename(emp['Name'])
                 temp_file_base = f"{safe_vessel}===SEP==={safe_emp}"
 
+                # 💡 恢复干净的文件名：只用名字，不要序号
+                final_filename = safe_emp
+
                 # 写入正常的 Word 版本
                 temp_docx_path = os.path.join(temp_dir, f"{temp_file_base}.docx")
                 if os.path.exists(temp_docx_path):
                     with open(temp_docx_path, 'rb') as f:
-                        zip_file.writestr(f"Word_Version/{safe_vessel}/{safe_emp}.docx", f.read())
+                        zip_file.writestr(f"Word_Version/{safe_vessel}/{final_filename}.docx", f.read())
 
-                # 写入刚刚批量生成的 PDF 版本
+                # 写入 PDF 版本（带防空文件检查）
                 temp_pdf_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.pdf")
                 if os.path.exists(temp_pdf_path):
-                    with open(temp_pdf_path, 'rb') as f:
-                        # 存入 ZIP 时，去掉 _for_pdf 后缀，让文件显得干干净净
-                        zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
+                    if os.path.getsize(temp_pdf_path) > 100:
+                        with open(temp_pdf_path, 'rb') as f:
+                            zip_file.writestr(f"PDF_Version/{safe_vessel}/{final_filename}.pdf", f.read())
+                    else:
+                        st.error(f"Warning: PDF for {safe_emp} generated but appears corrupted (too small).")
 
     zip_buffer.seek(0)
     return zip_buffer
