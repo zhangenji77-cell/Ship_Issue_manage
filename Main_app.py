@@ -234,7 +234,9 @@ def normalize_key(key):
 
 
 def clean_filename(name):
-    return re.sub(r'[\\/*?:"<>|]', "", str(name)).strip()
+    # 先转字符串，再去掉两端空格，再去掉 Windows/Linux 不允许的特殊字符
+    name = str(name).strip()
+    return re.sub(r'[\\/*?:"<>|]', "", name).strip()
 
 
 def format_currency(val):
@@ -482,13 +484,34 @@ def generate_payslip_zip(uploaded_excel):
                 temp_pdf_docx_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.docx")
                 doc.save(temp_pdf_docx_path)
 
-            # --- 阶段二：集中火力，批量进行 PDF 转换 ---
-            docs_to_convert = glob.glob(os.path.join(temp_dir, "*_for_pdf.docx"))
-            if docs_to_convert:
-                cmd = ['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', temp_dir] + docs_to_convert
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-            # --- 阶段三：将所有生成好的文件统一打包 ---
+
+            # 🚀 第二阶段：增强版批量 PDF 转换 (解决文件损坏问题)
+            # ==========================================
+            docs_to_convert = glob.glob(os.path.join(temp_dir, "*_for_pdf.docx"))
+
+            if docs_to_convert:
+                # 💡 核心改进：添加 -env:UserInstallation 参数
+                # 这会为每次转换创建一个独立的临时环境，防止多用户并发时 LibreOffice 崩溃或生成损坏文件
+                user_profile_path = f"file://{temp_dir}/libo_user"
+
+                cmd = [
+                          'libreoffice',
+                          f'-env:UserInstallation={user_profile_path}',  # 强制独立环境
+                          '--headless',
+                          '--convert-to', 'pdf',
+                          '--outdir', temp_dir
+                      ] + docs_to_convert
+
+                # 执行转换
+                process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+                # 如果你想调试，可以取消下面这行的注释来查看服务器报错日志
+                # st.write(process.stderr.decode())
+
+            # ==========================================
+            # 🚀 第三阶段：打包 (增加文件完整性检查)
+            # ==========================================
             for emp in employees:
                 safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
                 safe_emp = clean_filename(emp['Name'])
@@ -500,12 +523,16 @@ def generate_payslip_zip(uploaded_excel):
                     with open(temp_docx_path, 'rb') as f:
                         zip_file.writestr(f"Word_Version/{safe_vessel}/{safe_emp}.docx", f.read())
 
-                # 写入批量生成的 PDF 版本
+                # 写入 PDF 版本（增加大小检查）
                 temp_pdf_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.pdf")
                 if os.path.exists(temp_pdf_path):
-                    with open(temp_pdf_path, 'rb') as f:
-                        zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
-
+                    # 💡 检查文件大小，如果小于 1KB，说明 PDF 是损坏的空文件
+                    if os.path.getsize(temp_pdf_path) > 100:
+                        with open(temp_pdf_path, 'rb') as f:
+                            zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
+                    else:
+                        # 记录一下损坏的文件名，方便排查
+                        st.error(f"Warning: PDF for {safe_emp} generated but appears corrupted (too small).")
     zip_buffer.seek(0)
     return zip_buffer
 
