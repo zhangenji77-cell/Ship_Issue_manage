@@ -535,28 +535,32 @@ def generate_payslip_zip(uploaded_excel):
 
             # ==========================================
             # 🚀 第三阶段：打包 (增加文件完整性检查)
-            # ==========================================
+
             for emp in employees:
                 safe_vessel = clean_filename(emp['Vessel Name']) or "Uncategorized"
                 safe_emp = clean_filename(emp['Name'])
                 temp_file_base = f"{safe_vessel}===SEP==={safe_emp}"
 
+                # 💡 核心修改：获取职位对应的数字序号，并加到文件名前面
+                rank_prio = get_rank_priority(emp['Rank'])
+                # 格式例如：01_张三 (数字在前，保证 Windows/Mac 乖乖按数字大小排序)
+                final_filename = f"{rank_prio:02d}_{safe_emp}"
+
                 # 写入正常的 Word 版本
                 temp_docx_path = os.path.join(temp_dir, f"{temp_file_base}.docx")
                 if os.path.exists(temp_docx_path):
                     with open(temp_docx_path, 'rb') as f:
-                        zip_file.writestr(f"Word_Version/{safe_vessel}/{safe_emp}.docx", f.read())
+                        zip_file.writestr(f"Word_Version/{safe_vessel}/{final_filename}.docx", f.read())
 
-                # 写入 PDF 版本（增加大小检查）
+                # 写入 PDF 版本（带防损坏空文件检查）
                 temp_pdf_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.pdf")
                 if os.path.exists(temp_pdf_path):
-                    # 💡 检查文件大小，如果小于 1KB，说明 PDF 是损坏的空文件
                     if os.path.getsize(temp_pdf_path) > 100:
                         with open(temp_pdf_path, 'rb') as f:
-                            zip_file.writestr(f"PDF_Version/{safe_vessel}/{safe_emp}.pdf", f.read())
+                            zip_file.writestr(f"PDF_Version/{safe_vessel}/{final_filename}.pdf", f.read())
                     else:
-                        # 记录一下损坏的文件名，方便排查
                         st.error(f"Warning: PDF for {safe_emp} generated but appears corrupted (too small).")
+
     zip_buffer.seek(0)
     return zip_buffer
 
@@ -772,8 +776,10 @@ def generate_advanced_payslips_zip(uploaded_excel):
                 safe_emp = clean_filename(emp['Name'])
                 temp_file_base = f"{safe_vessel}===SEP==={safe_emp}"
 
-                # 💡 恢复干净的文件名：只用名字，不要序号
-                final_filename = safe_emp
+                # 💡 核心修改：获取职位对应的数字序号，并加到文件名前面
+                rank_prio = get_rank_priority(emp['Rank'])
+                # 格式例如：01_张三 (数字在前，保证 Windows/Mac 乖乖按数字大小排序)
+                final_filename = f"{rank_prio:02d}_{safe_emp}"
 
                 # 写入正常的 Word 版本
                 temp_docx_path = os.path.join(temp_dir, f"{temp_file_base}.docx")
@@ -781,7 +787,7 @@ def generate_advanced_payslips_zip(uploaded_excel):
                     with open(temp_docx_path, 'rb') as f:
                         zip_file.writestr(f"Word_Version/{safe_vessel}/{final_filename}.docx", f.read())
 
-                # 写入 PDF 版本（带防空文件检查）
+                # 写入 PDF 版本（带防损坏空文件检查）
                 temp_pdf_path = os.path.join(temp_dir, f"{temp_file_base}_for_pdf.pdf")
                 if os.path.exists(temp_pdf_path):
                     if os.path.getsize(temp_pdf_path) > 100:
