@@ -1,3 +1,4 @@
+import math
 import time
 import re
 import io
@@ -618,28 +619,50 @@ def generate_advanced_payslips_zip(uploaded_excel):
                         return row_data[idx] if pd.notna(row_data[idx]) else ""
                 return ""
 
+            # 💡 1. 提取并清洗数据
             try:
                 m_str = str(get_val('MonthlySalary')).replace(',', '').strip()
                 m_val = float(m_str) if m_str else 0.0
             except:
                 m_val = 0.0
 
-            basic_val = m_val * 0.58
-            ot_val = m_val * 0.37
-            fixed_ot = int(ot_val) + 1 if (round(ot_val, 4) - int(ot_val)) >= 0.5 else int(ot_val)
-            lp_val = m_val * 0.05
-            leave_pay = int(lp_val) + 1 if (round(lp_val, 4) - int(lp_val)) > 0.5 else int(lp_val)
+            try:
+                inc_str = str(get_val('Incentive')).replace(',', '').strip()
+                inc_val = float(inc_str) if inc_str else 0.0
+            except:
+                inc_val = 0.0
 
+            try:
+                reim_str = str(get_val('Reimbursement')).replace(',', '').strip()
+                reim_val = float(reim_str) if reim_str else 0.0
+            except:
+                reim_val = 0.0
+
+            # 💡 2. 应用进位/退位数学规则
+            basic_val = math.ceil(m_val * 0.58) if m_val > 0 else 0.0
+            fixed_ot = math.floor(m_val * 0.37) if m_val > 0 else 0.0
+            leave_pay = m_val * 0.05
+
+            total_earnings = m_val + inc_val
+            net_amount = total_earnings + reim_val
+            total_deductions = 0.0  # 恒为零
+
+            # 💡 3. 构建规范化的员工数据字典
             emp = {
                 'Vessel Name': current_vessel, 'Name': get_val('Name'), 'Rank': get_val('Rank'),
                 'From': format_date_custom(get_val('FromDate') or get_val('From')),
                 'To': format_date_custom(get_val('ToDate') or get_val('To')),
                 'Day on Board': str(get_val('DayonBoard')),
-                'Basic Salary': format_currency(basic_val), 'Fixed OT': format_currency(fixed_ot),
-                'Leave Pay': format_currency(leave_pay), 'Total Earnings': format_currency(m_val),
-                'Reimbursement': format_currency(get_val('Reimbursement')),
-                'Net Amount': format_currency(get_val('SubTotal')),
-                'Total Deductions': format_currency(get_val('Deduction')),
+
+                'Basic Salary': format_currency(basic_val),
+                'Fixed OT': format_currency(fixed_ot),
+                'Leave Pay': format_currency(leave_pay),
+                'Bonus/Incentive': format_currency(inc_val),
+                'Total Earnings': format_currency(total_earnings),
+                'Reimbursement': format_currency(reim_val),
+                'Net Amount': format_currency(net_amount),
+                'Total Deductions': format_currency(total_deductions),
+
                 'Release': format_currency(get_val('ReleaseofSalary')),
                 'Retaining': format_currency(get_val('Retaining')),
                 'Remittance': format_currency(get_val('RemittanceForeignBank') or get_val('Remittance')),
@@ -711,6 +734,8 @@ def generate_advanced_payslips_zip(uploaded_excel):
                                 set_cell_text(row.cells[col_earn], emp['Fixed OT'])
                             elif "Leave Pay" in label:
                                 set_cell_text(row.cells[col_earn], emp['Leave Pay'])
+                            elif "Bonus" in label or "Incentive" in label:
+                                set_cell_text(row.cells[col_earn], emp['Bonus/Incentive'])
                             elif "Total Earnings" in label:
                                 set_cell_text(row.cells[col_earn], emp['Total Earnings'])
                             elif "Reimbursement" in label:
@@ -729,7 +754,6 @@ def generate_advanced_payslips_zip(uploaded_excel):
                                     set_cell_text(row.cells[col_deduct], emp['Retaining'])
                                 elif "Remittance - Bank" in c_txt:
                                     set_cell_text(row.cells[col_deduct], emp['Remittance'])
-
                 rem = str(emp['Remarks']).strip()
                 if rem and rem.lower() != 'nan' and rem != '0':
                     for p in doc.paragraphs:
