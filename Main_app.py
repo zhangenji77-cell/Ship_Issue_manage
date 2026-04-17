@@ -639,14 +639,16 @@ def generate_advanced_payslips_zip(uploaded_excel):
                 reim_val = 0.0
 
             # 💡 2. 应用进位/退位数学规则
-            basic_val = math.ceil(m_val * 0.58) if m_val > 0 else 0.0
-            fixed_ot = math.floor(m_val * 0.37) if m_val > 0 else 0.0
-            leave_pay = m_val * 0.05
+            # 58% 正常计算
+            basic_val = m_val * 0.58
+            # 37% 进一位 (ceil: 向上取整)
+            fixed_ot = math.ceil(m_val * 0.37) if m_val > 0 else 0.0
+            # 5% 退一位 (floor: 向下取整)
+            leave_pay = math.floor(m_val * 0.05) if m_val > 0 else 0.0
 
             total_earnings = m_val + inc_val
             net_amount = total_earnings + reim_val
             total_deductions = 0.0  # 恒为零
-
             # 💡 3. 构建规范化的员工数据字典
             emp = {
                 'Vessel Name': current_vessel, 'Name': get_val('Name'), 'Rank': get_val('Rank'),
