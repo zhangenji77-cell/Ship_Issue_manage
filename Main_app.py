@@ -784,7 +784,6 @@ def generate_advanced_payslips_zip(uploaded_excel):
                 doc.save(temp_pdf_docx_path)
 
             # ==========================================
-            # 🚀 第二阶段：集中火力，批量进行 PDF 转换 (提速核心！)
             # ==========================================
             # 获取所有以 _for_pdf.docx 结尾的临时文件
             docs_to_convert = glob.glob(os.path.join(temp_dir, "*_for_pdf.docx"))
@@ -867,8 +866,8 @@ if st.sidebar.button("Log Out Safely"):
 @st.cache_data(ttl=60)
 def get_ships_list(role, user):
     with get_engine().connect() as conn:
-        # 修改：让 payroll 角色也能通过验证（虽然他们看不到填报页，但防止底层数据报错）
-        if role in ['admin', 'payroll']:
+        # 💡 把新角色 'supervisor' 加进特权名单里，这样他就能获取整个公司的船舶列表
+        if role in ['admin', 'payroll', 'supervisor']:
             return pd.read_sql_query(text("SELECT id, ship_name FROM ships ORDER BY ship_name"), conn)
         return pd.read_sql_query(text("SELECT id, ship_name FROM ships WHERE manager_name = :u ORDER BY ship_name"),
                                  conn, params={"u": user})
@@ -1142,10 +1141,9 @@ if st.session_state.role != 'payroll':
                 """
             params = {"s": start_d, "e": end_d}
 
-            if st.session_state.role != 'admin':
+            if st.session_state.role not in ['admin', 'supervisor']:
                 query += " AND s.manager_name = :u"
                 params["u"] = st.session_state.username
-
             query += " ORDER BY r.report_date DESC"
             export_df = pd.read_sql_query(text(query), conn, params=params)
 
